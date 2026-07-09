@@ -1,4 +1,3 @@
-import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 from main import run_startup_diagnostics
