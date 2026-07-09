@@ -7,8 +7,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     # API Keys
     OPENROUTER_API_KEY: str = "mock_key"
-    OPENROUTER_MODEL: str = "google/gemma-2-9b-it:free"
+    PRIMARY_MODEL: str = "google/gemma-4-31b-it:free"
+    FALLBACK_MODELS: str = "qwen/qwen-2.5-72b-instruct:free,deepseek/deepseek-chat:free"
     OPENROUTER_API_URL: str = "https://openrouter.ai/api/v1/chat/completions"
+
+    @property
+    def OPENROUTER_MODEL(self) -> str:
+        return self.PRIMARY_MODEL
+
+    @property
+    def fallback_models_list(self) -> List[str]:
+        return [m.strip() for m in self.FALLBACK_MODELS.split(",") if m.strip()]
 
     # Telegram Bot Settings
     TELEGRAM_BOT_TOKEN: str = "mock_token"

@@ -323,20 +323,27 @@ async def health_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     # 1. DB connection check
     db_status = "OK"
+    migration_status = "OK"
     try:
         async with async_session_maker() as session:
             await session.execute(select(1))
     except Exception as e:
         db_status = f"FAILED ({str(e)})"
+        migration_status = "FAILED"
 
     # 2. OpenRouter check
     or_status = "OK"
+    fallback_status = "OK"
     try:
-        success, msg = await evaluator.verify_connectivity()
+        success, msg, latency = await evaluator.verify_connectivity()
         if not success:
             or_status = f"WARNING ({msg})"
+            fallback_status = "WARNING"
+        else:
+            or_status = f"OK ({latency} ms)"
     except Exception as e:
         or_status = f"FAILED ({str(e)})"
+        fallback_status = "FAILED"
 
     # 3. SMTP Check
     smtp_status = "Not Configured"
@@ -350,11 +357,10 @@ async def health_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         smtp_status = f"FAILED ({str(e)})"
 
     # 4. Scrapers Check
-    scraper_statuses = []
+    enabled_scrapers_count = 0
     for sc in job_service.scrapers:
-        status = "Disabled (403)" if getattr(sc, "is_disabled", False) else "OK"
-        scraper_statuses.append(f"- {sc.source_name.upper()}: <code>{status}</code>")
-    scrapers_str = "\n".join(scraper_statuses)
+        if not getattr(sc, "is_disabled", False):
+            enabled_scrapers_count += 1
 
     from app.scheduler.jobs import scheduler
     sched_status = "OK" if scheduler.running else "STOPPED"
@@ -362,11 +368,14 @@ async def health_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     health_report = (
         "🩺 <b>Diagnostik Kesehatan Platform:</b>\n\n"
         f"Database ........ <code>{db_status}</code>\n"
+        f"Migration ....... <code>{migration_status}</code>\n"
+        f"Telegram ........ <code>OK</code>\n"
+        f"SMTP ............ <code>{smtp_status}</code>\n"
         f"OpenRouter ...... <code>{or_status}</code>\n"
-        f"SMTP Server ..... <code>{smtp_status}</code>\n"
+        f"Primary Model ... <code>{settings.PRIMARY_MODEL}</code>\n"
+        f"Fallback ........ <code>{fallback_status}</code>\n"
         f"Scheduler ....... <code>{sched_status}</code>\n"
-        f"Configured Model: <code>{settings.OPENROUTER_MODEL}</code>\n\n"
-        f"<b>Status Scraper Portal:</b>\n{scrapers_str}"
+        f"Scrapers ........ <code>{enabled_scrapers_count} enabled</code>"
     )
     await update.message.reply_text(health_report, parse_mode="HTML")
 

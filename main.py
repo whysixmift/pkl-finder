@@ -34,10 +34,13 @@ async def run_startup_diagnostics(application) -> None:
 
     # 3. OpenRouter check
     or_status = "OK"
+    latency = 0
     try:
-        success, msg = await evaluator.verify_connectivity()
+        success, msg, latency = await evaluator.verify_connectivity()
         if not success:
             or_status = f"WARNING ({msg})"
+        else:
+            or_status = f"OK ({latency} ms)"
     except Exception as e:
         or_status = f"FAILED ({str(e)})"
 
@@ -49,6 +52,19 @@ async def run_startup_diagnostics(application) -> None:
         scraper_lines.append(f"    * {sc.source_name:<14} : {status}")
     scrapers_summary = "\n".join(scraper_lines)
 
+    # Print OpenRouter Health Check Block
+    or_health = (
+        "\n" + "-" * 40 + "\n"
+        "OpenRouter Health Check:\n"
+        f"API ............... {'OK' if 'FAILED' not in or_status and 'WARNING' not in or_status else 'FAIL'}\n"
+        f"Primary Model ..... {settings.PRIMARY_MODEL}\n"
+        f"Fallback .......... {len(settings.fallback_models_list)} configured\n"
+        f"Latency ........... {latency} ms\n"
+        f"Status ............ {or_status}\n"
+        + "-" * 40
+    )
+    logger.info(or_health)
+
     # Print Premium Diagnostic Summary Grid
     grid = "\n" + "=" * 55 + "\n"
     grid += "          PKL FINDER STARTUP DIAGNOSTICS GRID\n"
@@ -57,7 +73,7 @@ async def run_startup_diagnostics(application) -> None:
     grid += f"[+] Telegram Bot API  : {tg_status} ({bot_username})\n"
     grid += f"[+] OpenRouter Client : {or_status}\n"
     grid += "[+] Scheduler Engine  : OK\n"
-    grid += f"[+] Configured Model  : {settings.OPENROUTER_MODEL}\n"
+    grid += f"[+] Configured Model  : {settings.PRIMARY_MODEL}\n"
     grid += "[-] Scraper Statuses  :\n"
     grid += f"{scrapers_summary}\n"
     grid += "=" * 55

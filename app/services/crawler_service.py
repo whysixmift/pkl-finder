@@ -1,5 +1,4 @@
 import re
-import json
 import urllib.parse
 from typing import List, Optional, Tuple
 from bs4 import BeautifulSoup
@@ -194,8 +193,8 @@ class CompanyCareerCrawler(BaseScraper):
             # We can run another prompt specifically to write the email or parse it.
             # Let's make a dedicated AI Email writer method!
             if api_result.recommended and api_result.score >= settings.SCORE_THRESHOLD:
-                # Generate unique email via OpenRouter
-                subject, body = await self.write_cold_email(company.name, cv_context)
+                # Generate unique email via abstract LLM evaluator provider
+                subject, body = await evaluator.write_cold_email(company.name, cv_context)
                 
                 # Queue draft
                 await email_service.queue_email_draft(
@@ -211,61 +210,6 @@ class CompanyCareerCrawler(BaseScraper):
                 
         except Exception as e:
             logger.error(f"Failed to generate open application for {company.name}: {e}", exc_info=True)
-
-    async def write_cold_email(self, company_name: str, cv_text: str) -> Tuple[str, str]:
-        """Call OpenRouter LLM to write a professional cold email matching CV details."""
-        system_prompt = """
-        You are a professional email copywriter writing unique cold emails for internship applications.
-        Write a concise, professional, and convincing cold email to the recruitment team requesting a PKL / internship.
-        Do NOT use templates.
-        Do NOT use generic bracket placeholders (e.g. [Company Name], [My Name]). Write the actual company name and candidate details.
-        
-        The candidate is:
-        Name: Julian
-        School: SMK Negeri 2 Bekasi (Rekayasa Perangkat Lunak / Software Engineering)
-        Skills: Python, Java, C++, Robotics, Embedded Systems, IoT, Git.
-        Experience: FIRST Tech Challenge, Hack Club Mentor.
-        Looking for: PKL (Praktek Kerja Lapangan) or Internship.
-        
-        You must output ONLY a JSON object with:
-        {
-          "subject": "Unique, catchy subject line",
-          "body": "Complete email body"
-        }
-        """
-
-        prompt = f"Write an internship application email to: {company_name}"
-        
-        payload = {
-            "model": settings.OPENROUTER_MODEL,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            "response_format": {"type": "json_object"}
-        }
-
-        headers = {
-            "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/avrjulian/pkl-finder",
-            "X-Title": "PKL Finder Bot",
-        }
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(settings.OPENROUTER_API_URL, headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            content = data["choices"][0]["message"]["content"].strip()
-            
-            # Clean markdown code blocks if present
-            if content.startswith("```"):
-                match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", content)
-                if match:
-                    content = match.group(1)
-
-            parsed = json.loads(content)
-            return parsed["subject"], parsed["body"]
 
 # Shared instance
 career_crawler = CompanyCareerCrawler()
