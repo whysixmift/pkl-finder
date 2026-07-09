@@ -1,12 +1,13 @@
 import os
+import sys
 from typing import List
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # API Keys
     OPENROUTER_API_KEY: str = "mock_key"
-    OPENROUTER_MODEL: str = "qwen/qwen3-30b-a3b:free"
+    OPENROUTER_MODEL: str = "google/gemma-2-9b-it:free"
     OPENROUTER_API_URL: str = "https://openrouter.ai/api/v1/chat/completions"
 
     # Telegram Bot Settings
@@ -45,5 +46,17 @@ class Settings(BaseSettings):
         extra="ignore"
     )
 
-# Instantiate settings singleton
-settings = Settings()
+# Instantiate settings singleton with validation trapping
+try:
+    settings = Settings()
+except ValidationError as e:
+    print("=" * 60, file=sys.stderr)
+    print("FATAL ERROR: CONFIGURATION VALIDATION FAILED (.env)", file=sys.stderr)
+    print("=" * 60, file=sys.stderr)
+    for error in e.errors():
+        field = " -> ".join(str(p) for p in error['loc'])
+        print(f"[-] Variable: {field}", file=sys.stderr)
+        print(f"    Message : {error['msg']}", file=sys.stderr)
+    print("=" * 60, file=sys.stderr)
+    print("Please fix the environment variables and try again.", file=sys.stderr)
+    sys.exit(1)

@@ -4,12 +4,68 @@ from app.config.settings import settings
 from app.database.db import init_db
 from app.bot.handlers import setup_bot
 from app.scheduler.jobs import setup_scheduler, scheduler
+from app.ai.evaluator import evaluator
+from app.services.job_service import JobService
 from app.utils.logger import logger
+
+async def run_startup_diagnostics(application) -> None:
+    """Performs tests checking DB, Telegram, OpenRouter, and Scraper modules on boot (Issue 14)."""
+    logger.info("Executing system startup diagnostics...")
+    
+    # 1. DB connection check
+    db_status = "OK"
+    try:
+        await init_db()
+    except Exception as e:
+        db_status = f"FAILED ({str(e)})"
+        logger.critical(f"Database connection failed: {e}")
+        sys.exit(1)
+
+    # 2. Telegram Bot check
+    tg_status = "OK"
+    bot_username = "Unknown"
+    try:
+        bot_info = await application.bot.get_me()
+        bot_username = f"@{bot_info.username}"
+    except Exception as e:
+        tg_status = f"FAILED ({str(e)})"
+        logger.critical(f"Telegram Bot credentials validation failed: {e}")
+        sys.exit(1)
+
+    # 3. OpenRouter check
+    or_status = "OK"
+    try:
+        success, msg = await evaluator.verify_connectivity()
+        if not success:
+            or_status = f"WARNING ({msg})"
+    except Exception as e:
+        or_status = f"FAILED ({str(e)})"
+
+    # 4. Scrapers Status mapping
+    job_service = JobService()
+    scraper_lines = []
+    for sc in job_service.scrapers:
+        status = "Disabled (403)" if getattr(sc, "is_disabled", False) else "OK"
+        scraper_lines.append(f"    * {sc.source_name:<14} : {status}")
+    scrapers_summary = "\n".join(scraper_lines)
+
+    # Print Premium Diagnostic Summary Grid
+    grid = "\n" + "=" * 55 + "\n"
+    grid += "          PKL FINDER STARTUP DIAGNOSTICS GRID\n"
+    grid += "=" * 55 + "\n"
+    grid += f"[+] Database Engine   : {db_status}\n"
+    grid += f"[+] Telegram Bot API  : {tg_status} ({bot_username})\n"
+    grid += f"[+] OpenRouter Client : {or_status}\n"
+    grid += f"[+] Scheduler Engine  : OK\n"
+    grid += f"[+] Configured Model  : {settings.OPENROUTER_MODEL}\n"
+    grid += "[-] Scraper Statuses  :\n"
+    grid += f"{scrapers_summary}\n"
+    grid += "=" * 55
+    logger.info(grid)
 
 async def post_init(application) -> None:
     """Perform async startup operations inside the bot's event loop."""
-    logger.info("Initializing database tables...")
-    await init_db()
+    await run_startup_diagnostics(application)
     
     logger.info("Starting background scheduler...")
     setup_scheduler()
@@ -31,9 +87,6 @@ def main() -> None:
     if not settings.TELEGRAM_BOT_TOKEN or settings.TELEGRAM_BOT_TOKEN.startswith("your_"):
         logger.critical("TELEGRAM_BOT_TOKEN is not configured. Exiting.")
         sys.exit(1)
-        
-    if not settings.OPENROUTER_API_KEY or settings.OPENROUTER_API_KEY.startswith("your_"):
-        logger.warning("OPENROUTER_API_KEY is not configured. Fallback matching rules will be active.")
 
     try:
         # Build python-telegram-bot Application

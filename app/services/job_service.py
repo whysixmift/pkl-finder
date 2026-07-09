@@ -1,13 +1,15 @@
 import json
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy import select, func, desc
 from sqlalchemy.orm import selectinload
+from sqlalchemy.exc import IntegrityError
 from app.config.settings import settings
 from app.database.db import async_session_maker
 from app.database.models import Job, AIScore, Company, Favorite, History
 from app.ai.evaluator import evaluator
+from app.services.cv_service import cv_service
 from app.scraper import (
     GlintsScraper,
     LinkedInScraper,
@@ -41,30 +43,48 @@ class JobService:
         keywords = settings.keywords_list
         locations = settings.locations_list
 
+        # Track scraper summary status (Issue 5)
+        scraper_stats: Dict[str, Any] = {}
+
         # Execute scrapers across keywords and locations
         for scraper in self.scrapers:
+            if getattr(scraper, "is_disabled", False):
+                scraper_stats[scraper.source_name] = "disabled (403)"
+                continue
+
+            scraper_jobs_found = 0
             for kw in keywords:
                 for loc in locations:
                     try:
-                        logger.info(f"Running {scraper.source_name} for '{kw}' in '{loc}'")
+                        logger.debug(f"Running {scraper.source_name} for '{kw}' in '{loc}'")
                         jobs = await scraper.scrape(kw, loc)
-                        all_scraped_jobs.extend(jobs)
+                        if jobs:
+                            all_scraped_jobs.extend(jobs)
+                            scraper_jobs_found += len(jobs)
                     except Exception as e:
                         logger.error(f"Error executing scraper {scraper.source_name} for '{kw}' in '{loc}': {e}", exc_info=True)
+            
+            # Record execution status
+            if getattr(scraper, "is_disabled", False):
+                scraper_stats[scraper.source_name] = "disabled (403)"
+            else:
+                scraper_stats[scraper.source_name] = f"{scraper_jobs_found} jobs"
 
-        logger.info(f"Total jobs scraped from all sources before deduplication: {len(all_scraped_jobs)}")
+        logger.info(f"Total jobs crawled from all sources before deduplication: {len(all_scraped_jobs)}")
 
         # Deduplicate results in memory based on URL
         unique_scraped: Dict[str, Dict[str, Any]] = {}
         for j in all_scraped_jobs:
             unique_scraped[j["url"]] = j
 
-        logger.info(f"Unique jobs scraped: {len(unique_scraped)}")
-
         newly_recommended_jobs: List[Job] = []
         jobs_processed = 0
+        duplicate_skips = 0
 
         async with async_session_maker() as session:
+            # Load dynamic CV text from DB
+            cv_text = await cv_service.get_active_cv_text(session)
+
             for url, raw_job in unique_scraped.items():
                 if jobs_processed >= settings.MAX_JOBS_PER_RUN:
                     logger.info(f"Reached MAX_JOBS_PER_RUN limit ({settings.MAX_JOBS_PER_RUN}). Stopping evaluation loop.")
@@ -72,7 +92,7 @@ class JobService:
 
                 job_key = self._generate_job_key(url)
 
-                # Check if job already exists in DB
+                # Check if job URL key already exists in DB
                 stmt = select(Job).where(Job.job_key == job_key)
                 res = await session.execute(stmt)
                 existing_job = res.scalar_one_or_none()
@@ -80,45 +100,52 @@ class JobService:
                 if existing_job:
                     continue
 
-                # Prepare new Job
-                logger.info(f"Processing new job: {raw_job['title']} at {raw_job['company']}")
-                
-                # Fetch or create company record
-                company_name = raw_job["company"]
-                comp_stmt = select(Company).where(Company.name == company_name)
-                comp_res = await session.execute(comp_stmt)
-                company = comp_res.scalar_one_or_none()
-                
-                if not company:
-                    company = Company(name=company_name)
-                    session.add(company)
-                    await session.flush() # Populate ID
+                # Prepare job insertion inside an atomic savepoint to catch composite duplicates (Issue 9)
+                try:
+                    async with session.begin_nested():
+                        # Fetch or create company record
+                        company_name = raw_job["company"]
+                        comp_stmt = select(Company).where(Company.name == company_name)
+                        comp_res = await session.execute(comp_stmt)
+                        company = comp_res.scalar_one_or_none()
+                        
+                        if not company:
+                            company = Company(name=company_name)
+                            session.add(company)
+                            await session.flush() # Populate ID
 
-                # Insert Job record
-                new_job = Job(
-                    job_key=job_key,
-                    title=raw_job["title"],
-                    company_id=company.id,
-                    company_name=company_name,
-                    location=raw_job["location"],
-                    description=raw_job["description"],
-                    url=raw_job["url"],
-                    posted_date=raw_job["posted_date"],
-                    source=raw_job["source"],
-                    salary=raw_job["salary"],
-                    work_mode=raw_job["work_mode"],
-                    employment_type=raw_job["employment_type"],
-                )
-                session.add(new_job)
-                await session.flush()
+                        # Insert Job record
+                        new_job = Job(
+                            job_key=job_key,
+                            title=raw_job["title"],
+                            company_id=company.id,
+                            company_name=company_name,
+                            location=raw_job["location"],
+                            description=raw_job["description"],
+                            url=raw_job["url"],
+                            posted_date=raw_job["posted_date"],
+                            source=raw_job["source"],
+                            salary=raw_job["salary"],
+                            work_mode=raw_job["work_mode"],
+                            employment_type=raw_job["employment_type"],
+                        )
+                        session.add(new_job)
+                        await session.flush()
 
-                # AI Matching evaluation
+                except IntegrityError:
+                    # Enforce unique index (title + company + location) block (Issue 9)
+                    duplicate_skips += 1
+                    logger.debug(f"Duplicate job skipped by index constraint: {raw_job['title']} at {raw_job['company']}")
+                    continue
+
+                # AI Matching evaluation using dynamic CV text
                 try:
                     eval_result = await evaluator.evaluate_job(
                         title=new_job.title,
                         company=new_job.company_name,
                         location=new_job.location,
                         description=new_job.description,
+                        cv_text=cv_text
                     )
 
                     ai_score = AIScore(
@@ -129,6 +156,9 @@ class JobService:
                         matched_skills=json.dumps(eval_result.matched_skills),
                         missing_skills=json.dumps(eval_result.missing_skills),
                         summary=eval_result.summary,
+                        company_category=eval_result.company_category,
+                        work_mode=eval_result.work_mode,
+                        priority=eval_result.priority
                     )
                     session.add(ai_score)
 
@@ -136,7 +166,7 @@ class JobService:
                     history_entry = History(
                         job_id=new_job.id,
                         action="evaluated",
-                        details=f"Evaluated with score: {ai_score.score}. Recommended: {ai_score.recommended}",
+                        details=f"Score: {ai_score.score}. Recommended: {ai_score.recommended}",
                     )
                     session.add(history_entry)
 
@@ -165,7 +195,23 @@ class JobService:
                 res = await session.execute(stmt)
                 final_recommended.append(res.scalar_one())
 
+            # Print structured summary report (Issue 5)
+            self._log_structured_summary(scraper_stats, len(unique_scraped), duplicate_skips, len(newly_recommended_jobs))
+
             return final_recommended
+
+    def _log_structured_summary(self, scrapers: Dict[str, Any], unique_scraped: int, duplicate_skips: int, recommended: int) -> None:
+        """Print clean concise summary report to INFO log."""
+        summary = "\n" + "=" * 50 + "\n"
+        summary += "SCRAPING CYCLE COMPLETE SUMMARY:\n\n"
+        summary += "Scrapers Status:\n"
+        for scraper_name, status in scrapers.items():
+            summary += f"- {scraper_name:<12}: {status}\n"
+        summary += f"\nUnique Crawled : {unique_scraped}\n"
+        summary += f"Duplicates Skipped: {duplicate_skips}\n"
+        summary += f"AI Recommended    : {recommended} notifications sent\n"
+        summary += "=" * 50
+        logger.info(summary)
 
     async def get_latest_jobs(self, limit: int = 10, recommended_only: bool = False) -> List[Job]:
         """Fetch newest jobs from database."""
@@ -270,6 +316,9 @@ class JobService:
             res = await session.execute(stmt)
             jobs = res.scalars().all()
 
+            # Load CV text
+            cv_text = await cv_service.get_active_cv_text(session)
+
             for job in jobs:
                 try:
                     eval_result = await evaluator.evaluate_job(
@@ -277,6 +326,7 @@ class JobService:
                         company=job.company_name,
                         location=job.location,
                         description=job.description,
+                        cv_text=cv_text
                     )
 
                     if job.ai_score:
@@ -286,6 +336,9 @@ class JobService:
                         job.ai_score.matched_skills = json.dumps(eval_result.matched_skills)
                         job.ai_score.missing_skills = json.dumps(eval_result.missing_skills)
                         job.ai_score.summary = eval_result.summary
+                        job.ai_score.company_category = eval_result.company_category
+                        job.ai_score.work_mode = eval_result.work_mode
+                        job.ai_score.priority = eval_result.priority
                         job.ai_score.evaluated_at = datetime.utcnow()
                     else:
                         ai_score = AIScore(
@@ -296,6 +349,9 @@ class JobService:
                             matched_skills=json.dumps(eval_result.matched_skills),
                             missing_skills=json.dumps(eval_result.missing_skills),
                             summary=eval_result.summary,
+                            company_category=eval_result.company_category,
+                            work_mode=eval_result.work_mode,
+                            priority=eval_result.priority
                         )
                         session.add(ai_score)
 

@@ -12,6 +12,10 @@ class IndeedScraper(BaseScraper):
 
     async def scrape(self, keyword: str, location: str) -> List[Dict[str, Any]]:
         """Scrapes jobs from Indeed Indonesia using RSS feeds to avoid Cloudflare blocks."""
+        if self.is_disabled:
+            logger.debug(f"[{self.source_name}] Scraper is disabled due to persistent 403 Forbidden blocks.")
+            return []
+
         jobs = []
         encoded_keyword = urllib.parse.quote(keyword)
         
@@ -23,13 +27,22 @@ class IndeedScraper(BaseScraper):
         logger.info(f"[{self.source_name}] Scraping RSS URL: {url}")
         
         xml_content = await self.fetch_url(url)
+        
+        # Handle 403 auto-disable check
+        if self.last_status_code == 403:
+            logger.error(
+                f"[{self.source_name}] Indeed RSS endpoint returned 403 Forbidden. "
+                "The IP or client has been blocked by Indeed. Disabling Indeed scraper to avoid log flood."
+            )
+            self.is_disabled = True
+            return []
+
         if not xml_content:
             logger.warning(f"[{self.source_name}] No XML returned from Indeed RSS feed")
             return jobs
 
         try:
             # Parse XML safely using standard library ElementTree
-            # Convert to bytes first to handle encoding declarations correctly
             root = ET.fromstring(xml_content.encode("utf-8"))
             items = root.findall(".//item")
             logger.info(f"[{self.source_name}] Found {len(items)} items in RSS feed")
@@ -42,7 +55,6 @@ class IndeedScraper(BaseScraper):
                         continue
 
                     # Indeed RSS titles are usually: "Job Title - Company Name - Location"
-                    # Or: "Job Title - Company Name"
                     parts = [p.strip() for p in raw_title.split(" - ")]
                     
                     title = parts[0]
@@ -56,7 +68,6 @@ class IndeedScraper(BaseScraper):
                     # Description
                     desc_node = item.find("description")
                     description = desc_node.text.strip() if desc_node is not None and desc_node.text else ""
-                    # Clean HTML tags from description if any
                     description = re.sub('<[^<]+?>', '', description)
 
                     # Date (timezone-neutral UTC)
@@ -64,7 +75,6 @@ class IndeedScraper(BaseScraper):
                     date_node = item.find("pubDate")
                     if date_node is not None and date_node.text:
                         try:
-                            # e.g., "Fri, 10 Jul 2026 12:00:00 GMT"
                             pub_date = datetime.strptime(date_node.text.strip()[:25], "%a, %d %b %Y %H:%M:%S")
                         except ValueError:
                             pass

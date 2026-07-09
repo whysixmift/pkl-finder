@@ -10,3 +10,13 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f main.py || exit 1"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

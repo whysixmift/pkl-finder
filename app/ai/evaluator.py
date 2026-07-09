@@ -1,7 +1,7 @@
 import json
 import asyncio
 import re
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import httpx
 from pydantic import BaseModel, Field
 from app.config.settings import settings
@@ -14,6 +14,9 @@ class AIResult(BaseModel):
     matched_skills: List[str] = Field(default_factory=list)
     missing_skills: List[str] = Field(default_factory=list)
     summary: str = Field(default="")
+    company_category: Optional[str] = Field(default="Technology")
+    work_mode: Optional[str] = Field(default="On-site")
+    priority: Optional[str] = Field(default="medium")
 
 # Candidate Profile Constant
 CANDIDATE_PROFILE = """
@@ -36,7 +39,7 @@ Your task is to analyze the job posting and evaluate its suitability against the
 Evaluation Criteria:
 1. Role Match: Does the job fit the preferred roles (Embedded, IoT, Robotics, Backend Python, Software Engineer, ML, CV)?
 2. Location Match: Is it in Bekasi, Jakarta, Depok, Tangerang, Bogor, or Remote?
-3. Type Match: Is it explicitly a "PKL", "Internship", "Magang", or suitable for a junior/student? (Reject full-time jobs requiring years of experience).
+3. Type Match: Is it explicitly a "PKL", "Internship", "Magang", or suitable for a student? (Reject full-time jobs requiring years of experience).
 4. Skill Match: How many of the candidate's skills match?
 
 You MUST return a JSON response with the following exact structure:
@@ -46,7 +49,10 @@ You MUST return a JSON response with the following exact structure:
   "reason": ["reason 1", "reason 2"],
   "matched_skills": ["skill 1", "skill 2"],
   "missing_skills": ["skill 3", "skill 4"],
-  "summary": "A concise summary of why this job fits or why it doesn't."
+  "summary": "A concise summary of why this job fits or why it doesn't.",
+  "company_category": "Embedded Systems" or "Software House" or "Robotics" or "IoT" or "General Tech",
+  "work_mode": "Remote" or "Hybrid" or "On-site",
+  "priority": "low" or "medium" or "high"
 }}
 
 Response instructions:
@@ -62,17 +68,73 @@ class OpenRouterEvaluator:
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/avrjulian/pkl-finder",
+            "HTTP-Referer": "https://github.com/whysixmift/pkl-finder",
             "X-Title": "PKL Finder Bot",
         }
 
+    async def verify_connectivity(self) -> Tuple[bool, str]:
+        """Verify OpenRouter credentials and connectivity on startup."""
+        if not self.api_key or self.api_key.startswith("your_") or self.api_key == "mock_key":
+            return False, "OpenRouter API Key is missing or default placeholder."
+
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": "Ping test."}],
+            "max_tokens": 5
+        }
+        
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(self.api_url, headers=self.headers, json=payload)
+                if response.status_code == 404:
+                    return False, f"Model '{self.model}' not found on OpenRouter (404)."
+                elif response.status_code in [401, 403]:
+                    return False, f"Invalid API Key (HTTP {response.status_code})."
+                elif response.status_code >= 400:
+                    return False, f"OpenRouter returned error HTTP {response.status_code}: {response.text}"
+                
+                response.raise_for_status()
+                return True, "OpenRouter connected successfully."
+        except Exception as e:
+            return False, f"Connection failed: {str(e)}"
+
     async def evaluate_job(
-        self, title: str, company: str, location: str, description: str, retries: int = 3
+        self, title: str, company: str, location: str, description: str, cv_text: Optional[str] = None, retries: int = 3
     ) -> AIResult:
         """Evaluate a job against the candidate profile using OpenRouter AI."""
-        if not self.api_key or self.api_key.startswith("your_"):
+        if not self.api_key or self.api_key.startswith("your_") or self.api_key == "mock_key":
             logger.warning("OpenRouter API key is missing or placeholder. Running fallback local evaluator.")
             return self._fallback_evaluate(title, company, location, description)
+
+        # Build dynamic system prompt based on custom CV if uploaded
+        sys_prompt = SYSTEM_PROMPT
+        if cv_text:
+            sys_prompt = f"""
+You are an expert AI recruiter matching internship/PKL jobs for Indonesian high school (SMK) / university students.
+Your task is to analyze the job posting and evaluate its suitability against the Candidate Profile below:
+
+Candidate Details:
+{cv_text}
+
+Evaluation Criteria:
+1. Role Match: Does the job fit the preferred roles?
+2. Location Match: Is it in the candidate's preferred location or Remote?
+3. Type Match: Is it explicitly a "PKL", "Internship", "Magang", or suitable for a student?
+4. Skill Match: How many of the candidate's skills match?
+
+You MUST return a JSON response with the following exact structure:
+{{
+  "recommended": true/false,
+  "score": 0-100 (integer representing match score),
+  "reason": ["reason 1", "reason 2"],
+  "matched_skills": ["skill 1", "skill 2"],
+  "missing_skills": ["skill 3", "skill 4"],
+  "summary": "A concise summary of why this job fits or why it doesn't.",
+  "company_category": "Embedded Systems" or "Software House" or "Robotics" or "IoT" or "General Tech",
+  "work_mode": "Remote" or "Hybrid" or "On-site",
+  "priority": "low" or "medium" or "high"
+}}
+"""
 
         prompt = f"""
         Job Title: {title}
@@ -85,7 +147,7 @@ class OpenRouterEvaluator:
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": prompt}
             ],
             "response_format": {"type": "json_object"}
@@ -97,6 +159,12 @@ class OpenRouterEvaluator:
                 try:
                     response = await client.post(self.api_url, headers=self.headers, json=payload)
                     
+                    # Permanent failures (Issue 4) - Do NOT retry
+                    if response.status_code in [401, 403, 404, 422]:
+                        logger.error(f"Permanent OpenRouter error (HTTP {response.status_code}): {response.text}. Fallback matching active.")
+                        return self._fallback_evaluate(title, company, location, description)
+                    
+                    # Transient failures
                     if response.status_code == 429:
                         retry_after = float(response.headers.get("Retry-After", backoff))
                         logger.warning(f"Rate limited (429). Retrying after {retry_after}s. Attempt {attempt + 1}/{retries}")
@@ -131,27 +199,58 @@ class OpenRouterEvaluator:
         return self._fallback_evaluate(title, company, location, description)
 
     def _parse_ai_response(self, content: str) -> AIResult:
-        """Robustly parse JSON response from the LLM."""
+        """Robustly parse JSON response from the LLM and validate it against the schema (Issue 11)."""
         try:
             # Clean markdown code blocks if any
             clean_content = content.strip()
             if clean_content.startswith("```"):
-                # Extract content inside code blocks
                 match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", clean_content)
                 if match:
                     clean_content = match.group(1)
             
             parsed = json.loads(clean_content)
+            
+            # Explicit schema validation
+            recommended = bool(parsed.get("recommended", False))
+            score = parsed.get("score", 0)
+            try:
+                score = int(score)
+            except (ValueError, TypeError):
+                score = 0
+            score = max(0, min(100, score))
+            
+            reason = parsed.get("reason", [])
+            if not isinstance(reason, list):
+                reason = [str(reason)] if reason else []
+                
+            matched_skills = parsed.get("matched_skills", [])
+            if not isinstance(matched_skills, list):
+                matched_skills = [str(matched_skills)] if matched_skills else []
+                
+            missing_skills = parsed.get("missing_skills", [])
+            if not isinstance(missing_skills, list):
+                missing_skills = [str(missing_skills)] if missing_skills else []
+                
+            summary = str(parsed.get("summary", ""))
+            company_category = str(parsed.get("company_category", "Technology"))
+            work_mode = str(parsed.get("work_mode", "On-site"))
+            priority = str(parsed.get("priority", "medium")).lower()
+            if priority not in ["low", "medium", "high"]:
+                priority = "medium"
+
             return AIResult(
-                recommended=bool(parsed.get("recommended", False)),
-                score=int(parsed.get("score", 0)),
-                reason=list(parsed.get("reason", [])),
-                matched_skills=list(parsed.get("matched_skills", [])),
-                missing_skills=list(parsed.get("missing_skills", [])),
-                summary=str(parsed.get("summary", ""))
+                recommended=recommended,
+                score=score,
+                reason=reason,
+                matched_skills=matched_skills,
+                missing_skills=missing_skills,
+                summary=summary,
+                company_category=company_category,
+                work_mode=work_mode,
+                priority=priority
             )
         except Exception as e:
-            logger.error(f"Error parsing AI response content: {e}. Raw content: {content}")
+            logger.error(f"Error parsing/validating AI response content: {e}. Raw content: {content}")
             raise e
 
     def _fallback_evaluate(self, title: str, company: str, location: str, description: str) -> AIResult:
@@ -223,13 +322,37 @@ class OpenRouterEvaluator:
         if "Embedded" not in matched_skills and "IoT" not in matched_skills:
             missing_skills.append("Embedded / IoT development match")
 
+        # Estimate Category
+        company_category = "General Tech"
+        if "Embedded" in matched_skills or "IoT" in matched_skills:
+            company_category = "IoT & Embedded"
+        elif "Robotics" in matched_skills:
+            company_category = "Robotics"
+        elif "Backend" in matched_skills:
+            company_category = "Software House"
+
+        work_mode = "On-site"
+        if "remote" in title_lower or "remote" in desc_lower:
+            work_mode = "Remote"
+        elif "hybrid" in title_lower or "hybrid" in desc_lower:
+            work_mode = "Hybrid"
+
+        priority = "medium"
+        if score >= 85:
+            priority = "high"
+        elif score < 60:
+            priority = "low"
+
         return AIResult(
             recommended=recommended,
             score=score,
             reason=reasons,
             matched_skills=matched_skills,
             missing_skills=missing_skills,
-            summary=f"Fallback matched {len(matched_skills)} key areas. Score: {score}."
+            summary=f"Fallback matched {len(matched_skills)} key areas. Score: {score}.",
+            company_category=company_category,
+            work_mode=work_mode,
+            priority=priority
         )
 
 # Shared evaluator instance

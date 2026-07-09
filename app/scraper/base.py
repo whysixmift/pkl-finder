@@ -21,6 +21,8 @@ class BaseScraper:
     def __init__(self, source_name: str) -> None:
         self.source_name = source_name
         self.timeout = 15.0
+        self.last_status_code: Optional[int] = None
+        self.is_disabled: bool = False
 
     def get_random_headers(self) -> Dict[str, str]:
         """Generate headers with rotated user-agent and standard browser headers."""
@@ -43,16 +45,24 @@ class BaseScraper:
         self, url: str, headers: Optional[Dict[str, str]] = None, retries: int = 3, is_json: bool = False
     ) -> Optional[Any]:
         """Fetch content from a URL with retries, exponential backoff, and error handling."""
+        if self.is_disabled:
+            logger.debug(f"[{self.source_name}] Request skipped. Scraper is currently disabled.")
+            return None
+
         req_headers = headers or self.get_random_headers()
         backoff = 2.0
+        self.last_status_code = None
 
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+        # Custom connection pooling via reusable AsyncClient limits
+        limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True, limits=limits) as client:
             for attempt in range(retries):
                 try:
                     # Random delay between 1-3 seconds to prevent rate limits
                     await asyncio.sleep(random.uniform(1.0, 3.0))
                     
                     response = await client.get(url, headers=req_headers)
+                    self.last_status_code = response.status_code
                     
                     if response.status_code == 429:
                         logger.warning(f"[{self.source_name}] Rate limited (429). Retrying after {backoff}s. Attempt {attempt + 1}/{retries}")
@@ -72,6 +82,17 @@ class BaseScraper:
                         return response.json()
                     return response.text
 
+                except httpx.HTTPStatusError as e:
+                    self.last_status_code = e.response.status_code
+                    logger.error(f"[{self.source_name}] HTTP status error on fetch for {url}: {e}")
+                    # Permanent failures (Issue 4) - Do NOT retry
+                    if self.last_status_code in [401, 403, 404, 422]:
+                        logger.error(f"[{self.source_name}] Permanent HTTP status error {self.last_status_code}. Aborting retries.")
+                        return None
+                    if attempt == retries - 1:
+                        return None
+                    await asyncio.sleep(backoff)
+                    backoff *= 2
                 except httpx.HTTPError as e:
                     logger.error(f"[{self.source_name}] HTTP error on fetch for {url}: {e}")
                     if attempt == retries - 1:
@@ -87,18 +108,5 @@ class BaseScraper:
     async def scrape(self, keyword: str, location: str) -> List[Dict[str, Any]]:
         """
         Abstract scrape method. Must be overridden by subclasses.
-        Returns a list of dicts:
-        {
-            "title": str,
-            "company": str,
-            "location": str,
-            "description": str,
-            "url": str,
-            "posted_date": Optional[datetime],
-            "source": str,
-            "salary": Optional[str],
-            "work_mode": Optional[str],
-            "employment_type": Optional[str]
-        }
         """
         raise NotImplementedError("Scrapers must implement the scrape method.")
