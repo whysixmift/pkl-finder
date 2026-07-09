@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 import urllib.parse
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from bs4 import BeautifulSoup
 from app.scraper.base import BaseScraper
 from app.utils.logger import logger
