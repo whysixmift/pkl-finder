@@ -56,7 +56,7 @@ async def run_startup_diagnostics(application) -> None:
     grid += f"[+] Database Engine   : {db_status}\n"
     grid += f"[+] Telegram Bot API  : {tg_status} ({bot_username})\n"
     grid += f"[+] OpenRouter Client : {or_status}\n"
-    grid += f"[+] Scheduler Engine  : OK\n"
+    grid += "[+] Scheduler Engine  : OK\n"
     grid += f"[+] Configured Model  : {settings.OPENROUTER_MODEL}\n"
     grid += "[-] Scraper Statuses  :\n"
     grid += f"{scrapers_summary}\n"

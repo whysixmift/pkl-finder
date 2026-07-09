@@ -1,17 +1,16 @@
 import os
 import json
+from datetime import datetime
 import smtplib
 import asyncio
-import base64
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
-from typing import Dict, Any, List, Optional, Tuple
+from typing import List, Optional
 from cryptography.fernet import Fernet
-from sqlalchemy import select, desc
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.config.settings import settings
-from app.database.models import SMTPConfig, EmailQueue, Company, Job
+from app.database.models import SMTPConfig, EmailQueue
 from app.utils.logger import logger
 
 # Initialize encryption keys
@@ -94,7 +93,7 @@ class EmailService:
 
     async def get_active_config(self, session: AsyncSession) -> Optional[SMTPConfig]:
         """Fetch active SMTP configuration."""
-        stmt = select(SMTPConfig).where(SMTPConfig.is_active == True).limit(1)
+        stmt = select(SMTPConfig).where(SMTPConfig.is_active.is_(True)).limit(1)
         res = await session.execute(stmt)
         return res.scalar_one_or_none()
 

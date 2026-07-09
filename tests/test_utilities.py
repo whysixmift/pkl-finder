@@ -1,6 +1,4 @@
 import unittest
-import os
-import logging
 from app.utils.logger import setup_logger
 
 class TestUtilities(unittest.TestCase):

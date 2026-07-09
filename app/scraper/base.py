@@ -2,7 +2,6 @@ import random
 import asyncio
 from typing import Dict, Any, List, Optional
 import httpx
-from app.config.settings import settings
 from app.utils.logger import logger
 
 # List of common real-world user agents for rotation

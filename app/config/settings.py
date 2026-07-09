@@ -1,7 +1,7 @@
 import os
 import sys
 from typing import List
-from pydantic import Field, field_validator, ValidationError
+from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):

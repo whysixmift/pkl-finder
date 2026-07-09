@@ -1,14 +1,15 @@
 import re
 import json
 import urllib.parse
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Optional, Tuple
 from bs4 import BeautifulSoup
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.db import async_session_maker
-from app.database.models import Company, Job, EmailQueue
-from app.ai.evaluator import evaluator, AIResult
+from app.database.models import Company, EmailQueue
+from app.config.settings import settings
+from app.ai.evaluator import evaluator
 from app.services.email_service import email_service
 from app.services.cv_service import cv_service
 from app.scraper.base import BaseScraper

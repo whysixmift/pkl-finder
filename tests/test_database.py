@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy import select
-from app.database.models import Base, Job, Company, Favorite, History, AIScore
+from app.database.models import Base, Job, Company, Favorite, History
 
 class TestDatabase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:

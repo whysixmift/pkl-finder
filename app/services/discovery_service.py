@@ -1,8 +1,6 @@
 import urllib.parse
-import re
-from typing import List, Set, Dict, Any
+from typing import List, Set, Optional
 from bs4 import BeautifulSoup
-import httpx
 from sqlalchemy import select
 from app.database.db import async_session_maker
 from app.database.models import Company

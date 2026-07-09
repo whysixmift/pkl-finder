@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 import urllib.parse
 from typing import Dict, Any, List
 from bs4 import BeautifulSoup

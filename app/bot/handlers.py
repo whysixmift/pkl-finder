@@ -1,20 +1,17 @@
 import os
 import json
-import logging
 from functools import wraps
-from typing import Dict, Any, List, Optional
-from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from app.config.settings import settings
 from app.services.job_service import JobService
-from app.services.email_service import email_service, decrypt_password, encrypt_password
+from app.services.email_service import email_service
 from app.services.cv_service import cv_service
 from app.services.crawler_service import career_crawler
 from app.services.discovery_service import discovery_engine
 from app.database.db import async_session_maker
-from app.database.models import Job, AIScore, Company, Favorite, History, SMTPConfig, EmailQueue, CVProfile, Portfolio, CoverLetter
-from app.ai.evaluator import evaluator, CANDIDATE_PROFILE
+from app.database.models import Job, Company, EmailQueue, Portfolio, CoverLetter
+from app.ai.evaluator import evaluator
 from app.utils.logger import logger
 from sqlalchemy import select, desc, func
 from sqlalchemy.orm import selectinload
@@ -190,7 +187,7 @@ async def latest_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("📭 Tidak ada lowongan rekomendasi terbaru di database.")
         return
         
-    await update.message.reply_text(f"📋 <b>Daftar 10 Lowongan Rekomendasi Terbaru:</b>", parse_mode="HTML")
+    await update.message.reply_text("📋 <b>Daftar 10 Lowongan Rekomendasi Terbaru:</b>", parse_mode="HTML")
     for job in jobs:
         text = format_job_message(job)
         keyboard = get_job_keyboard(job, is_fav=False)
@@ -381,8 +378,8 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         
         async with async_session_maker() as session:
             comp_count = await session.scalar(select(func.count(Company.id)))
-            disc_comp = await session.scalar(select(func.count(Company.id)).where(Company.is_discovered == True))
-            emails_count = await session.scalar(select(func.count(Company.id)).where(Company.recruitment_email != None))
+            disc_comp = await session.scalar(select(func.count(Company.id)).where(Company.is_discovered.is_(True)))
+            emails_count = await session.scalar(select(func.count(Company.id)).where(Company.recruitment_email.is_not(None)))
             drafts = await session.scalar(select(func.count(EmailQueue.id)).where(EmailQueue.status == "draft"))
             sent = await session.scalar(select(func.count(EmailQueue.id)).where(EmailQueue.status == "sent"))
 
@@ -693,8 +690,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
             elif action == "approve":
                 # Queue approval operations
-                stmt = select(EmailQueue).where(EmailQueue.id == entity_id)
-                res = await session.execute(stmt)
+                email_stmt = select(EmailQueue).where(EmailQueue.id == entity_id)
+                res = await session.execute(email_stmt)
                 draft = res.scalar_one_or_none()
                 if draft:
                     draft.status = "approved"
@@ -703,8 +700,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             
             elif action == "reject":
                 # Queue rejection
-                stmt = select(EmailQueue).where(EmailQueue.id == entity_id)
-                res = await session.execute(stmt)
+                email_stmt = select(EmailQueue).where(EmailQueue.id == entity_id)
+                res = await session.execute(email_stmt)
                 draft = res.scalar_one_or_none()
                 if draft:
                     draft.status = "rejected"
@@ -713,8 +710,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
             elif action == "send":
                 # Instant send
-                stmt = select(EmailQueue).where(EmailQueue.id == entity_id)
-                res = await session.execute(stmt)
+                email_stmt = select(EmailQueue).where(EmailQueue.id == entity_id)
+                res = await session.execute(email_stmt)
                 draft = res.scalar_one_or_none()
                 if draft:
                     await query.edit_message_text("⏳ <i>Sedang mengirim email...</i>", parse_mode="HTML")

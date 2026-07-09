@@ -1,7 +1,7 @@
 import json
 import hashlib
-from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Tuple
+from datetime import datetime
+from typing import Dict, Any, List, Tuple
 from sqlalchemy import select, func, desc
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
@@ -219,7 +219,7 @@ class JobService:
             stmt = select(Job).options(selectinload(Job.ai_score)).order_by(desc(Job.created_at))
             
             if recommended_only:
-                stmt = stmt.join(AIScore).where(AIScore.recommended == True)
+                stmt = stmt.join(AIScore).where(AIScore.recommended.is_(True))
                 
             stmt = stmt.limit(limit)
             res = await session.execute(stmt)
@@ -286,7 +286,7 @@ class JobService:
         """Fetch database statistics."""
         async with async_session_maker() as session:
             total_jobs_stmt = select(func.count(Job.id))
-            rec_jobs_stmt = select(func.count(Job.id)).join(AIScore).where(AIScore.recommended == True)
+            rec_jobs_stmt = select(func.count(Job.id)).join(AIScore).where(AIScore.recommended.is_(True))
             fav_jobs_stmt = select(func.count(Favorite.id))
             
             total_jobs = await session.execute(total_jobs_stmt)
