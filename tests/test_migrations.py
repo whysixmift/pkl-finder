@@ -1,6 +1,8 @@
 import os
 import unittest
 import shutil
+import asyncio
+import sqlalchemy as sa
 from unittest.mock import patch, MagicMock
 from app.config.settings import settings
 
@@ -112,6 +114,48 @@ class TestDatabaseMigrations(unittest.IsolatedAsyncioTestCase):
                 
         # 4. Database should remain healthy and queryable
         self.assertTrue(verify_database_schema())
+
+    async def test_data_aware_migration(self) -> None:
+        """Test that the migration successfully cleans up existing duplicate records before applying unique constraints."""
+        db_path = get_db_file_path()
+        assert db_path is not None
+        
+        # 1. Initialize DB at HEAD to create the initial tables structure
+        await init_db()
+        
+        from alembic.config import Config
+        from alembic import command
+        alembic_cfg = Config("alembic.ini")
+        
+        # 2. Downgrade database schema to the initial_schema (66d1ff3fb82b)
+        await asyncio.to_thread(command.downgrade, alembic_cfg, '66d1ff3fb82b')
+        
+        # 3. Insert duplicate rows in the downgraded schema (where user_id is absent)
+        from sqlalchemy import create_engine
+        sync_engine = create_engine(f"sqlite:///{db_path}")
+        with sync_engine.begin() as conn:
+            # Insert duplicate cover_letters (which has no unique constraints in downgraded schema).
+            conn.execute(sa.text("INSERT INTO cover_letters (text, uploaded_at) VALUES ('CL1', datetime('now'))"))
+            conn.execute(sa.text("INSERT INTO cover_letters (text, uploaded_at) VALUES ('CL2', datetime('now'))"))
+            
+            # Verify duplicates exist in cover_letters
+            count_cl = conn.execute(sa.text("SELECT COUNT(*) FROM cover_letters")).scalar()
+            self.assertEqual(count_cl, 2)
+
+        # 3. Trigger the multi-tenant migration (which deduplicates and creates unique indexes)
+        await asyncio.to_thread(command.upgrade, alembic_cfg, 'head')
+        
+        # 4. Verify that schema is healthy and unique constraints exist
+        self.assertTrue(verify_database_schema())
+        
+        # 5. Verify duplicates were cleaned up (only 1 row remains, keeping the newest)
+        with sync_engine.begin() as conn:
+            count_cl = conn.execute(sa.text("SELECT COUNT(*) FROM cover_letters")).scalar()
+            self.assertEqual(count_cl, 1)
+            
+            cl_text = conn.execute(sa.text("SELECT text FROM cover_letters")).scalar()
+            self.assertEqual(cl_text, 'CL2')
+
 
 if __name__ == "__main__":
     unittest.main()
