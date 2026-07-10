@@ -1,25 +1,29 @@
 import os
 import json
 from functools import wraps
+from datetime import datetime, timezone
+from typing import List
+from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
+
 from app.config.settings import settings
-from app.services.job_service import JobService
-from app.services.email_service import email_service
+from app.database.db import async_session_maker
+from app.database.models import Job, Company, EmailQueue, Portfolio, CoverLetter, AIScore
 from app.services.cv_service import cv_service
+from app.services.email_service import email_service
+from app.services.job_service import JobService
+from app.ai.evaluator import evaluator
 from app.services.crawler_service import career_crawler
 from app.services.discovery_service import discovery_engine
-from app.database.db import async_session_maker
-from app.database.models import Job, Company, EmailQueue, Portfolio, CoverLetter
-from app.ai.evaluator import evaluator
 from app.utils.logger import logger
-from sqlalchemy import select, desc, func
-from sqlalchemy.orm import selectinload
 
+# Initialize Job Service
 job_service = JobService()
 
 def admin_only(func):
-    """Decorator to restrict access to the configured admin ID (Issue 10)."""
+    """Decorator to restrict access to the configured admin ID."""
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         if not update.effective_user:
@@ -27,10 +31,10 @@ def admin_only(func):
         
         user_id = update.effective_user.id
         if user_id != settings.TELEGRAM_ADMIN_ID:
-            logger.warning(f"Unauthorized access attempt by user ID {user_id}")
+            logger.warning(f"Unauthorized admin command attempt by user ID {user_id}")
             if update.effective_message:
                 await update.effective_message.reply_text(
-                    "⛔&nbsp;<b>Akses Ditolak:</b> Anda tidak diizinkan menggunakan bot ini.",
+                    "⛔&nbsp;<b>Akses Ditolak:</b> Command ini hanya untuk Administrator.",
                     parse_mode="HTML"
                 )
             return
@@ -38,7 +42,7 @@ def admin_only(func):
     return wrapper
 
 def error_boundary(func):
-    """Catches all exceptions to prevent bot crashes and replies with helpful diagnostics (Issue 10)."""
+    """Catches all exceptions to prevent bot crashes and replies with helpful diagnostics."""
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         try:
@@ -52,14 +56,19 @@ def error_boundary(func):
                 )
     return wrapper
 
-def format_job_message(job: Job) -> str:
+def format_job_message(job: Job, user_id: int) -> str:
     """Format a job vacancy into a clean, premium HTML message for Telegram."""
-    ai_score = job.ai_score
+    ai_score = None
+    for score in job.ai_scores:
+        if score.user_id == user_id:
+            ai_score = score
+            break
+
     score_str = f"📈 <b>Match Score:</b> <code>{ai_score.score}/100</code>" if ai_score else "📊 <b>Score:</b> N/A"
     
-    reasons = []
-    matched = []
-    missing = []
+    reasons: List[str] = []
+    matched: List[str] = []
+    missing: List[str] = []
     
     if ai_score:
         try:
@@ -93,10 +102,10 @@ def format_job_message(job: Job) -> str:
         f"{score_str}\n"
         f"💼 <b>Category:</b> <code>{getattr(ai_score, 'company_category', 'Tech')}</code>\n"
         f"🔥 <b>Priority:</b> <code>{getattr(ai_score, 'priority', 'medium').upper()}</code>\n\n"
-        f"✅ <b>Matched Skills:</b> {matched_str}\n"
-        f"❌ <b>Missing Skills:</b> {missing_str}\n\n"
-        f"📝 <b>Analisis AI:</b>\n<i>{summary}</i>\n\n"
-        f"🎯 <b>Alasan Kelayakan:</b>\n{reasons_list}"
+        f"📋 <b>Analisis Kesesuaian:</b>\n<i>{summary}</i>\n\n"
+        f"✅ <b>Kecocokan Skill:</b> {matched_str}\n"
+        f"❌ <b>Skill Kurang:</b> {missing_str}\n\n"
+        f"💡 <b>Mengapa Anda Cocok:</b>\n{reasons_list}"
     )
 
 def get_job_keyboard(job: Job, is_fav: bool = False) -> InlineKeyboardMarkup:
@@ -114,7 +123,6 @@ def get_job_keyboard(job: Job, is_fav: bool = False) -> InlineKeyboardMarkup:
 
 # ----------------- STARTUP & CONFIGS -----------------
 
-@admin_only
 @error_boundary
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     welcome_text = (
@@ -125,23 +133,21 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
     await update.message.reply_text(welcome_text, parse_mode="HTML")
 
-@admin_only
 @error_boundary
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = (
-        "⚙️&nbsp;<b>Sistem Utama:</b>\n"
-        "/search - Cari lowongan magang & matching AI\n"
-        "/latest - Tampilkan magang rekomendasi terbaru\n"
-        "/favorites - Lihat lowongan terfavorit\n"
-        "/stats - Tampilkan dashboard & statistik data\n"
-        "/settings - Tampilkan konfigurasi lingkungan\n"
-        "/health - Diagnostik server & koneksi API\n"
-        "/logs - Cek visual 15 baris log terakhir\n\n"
-        "👤&nbsp;<b>Profil & CV:</b>\n"
-        "/profile - Lihat CV otonom aktif\n"
-        "/uploadcv - Unggah CV baru (PDF/DOCX)\n"
-        "/uploadportfolio - Atur portfolio (ZIP/PDF/GitHub)\n"
-        "/uploadcoverletter - Simpan template cover letter\n\n"
+        "📖 <b>Daftar Perintah PKL Finder Bot:</b>\n\n"
+        "🔍&nbsp;<b>Pencarian & Informasi:</b>\n"
+        "/search - Jalankan scraping lowongan secara realtime\n"
+        "/latest - Tampilkan 10 lowongan magang rekomendasi terbaru\n"
+        "/favorites - Lihat lowongan magang yang difavoritkan\n"
+        "/history - Lihat riwayat pencocokan & aktivitas\n"
+        "/recheck - Evaluasi ulang semua lowongan terhadap CV aktif\n\n"
+        "👤&nbsp;<b>Profil & Portofolio:</b>\n"
+        "/profile - Periksa kelengkapan berkas CV & portofolio\n"
+        "/uploadcv - Unggah CV baru (.PDF atau .DOCX)\n"
+        "/uploadportfolio - Atur URL portofolio atau unggah file\n"
+        "/uploadcoverletter - Atur template cover letter pendukung\n\n"
         "📧&nbsp;<b>SMTP & Application Queue:</b>\n"
         "/credentials - Konfigurasi SMTP email pengirim\n"
         "/email - Periksa konfigurasi SMTP aktif\n"
@@ -149,20 +155,30 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/sendall - Dispatch semua email approved\n\n"
         "🏢&nbsp;<b>Company Discovery:</b>\n"
         "/companies - Tampilkan daftar perusahaan terdaftar\n"
-        "/openapplications - Tampilkan daftar Open Applications"
+        "/openapplications - Tampilkan daftar email Open Applications\n\n"
+        "🛠&nbsp;<b>Admin Diagnostics:</b>\n"
+        "/health - Periksa status kesehatan platform\n"
+        "/models - Status latensi OpenRouter & failover\n"
+        "/providers - Skor kesehatan & status scraper\n"
+        "/migrations - Riwayat revisi database Alembic\n"
+        "/schema - Verifikasi kecocokan skema DB dengan ORM\n"
+        "/doctor - Diagnosa lengkap subsystem & pemecahan error\n"
+        "/system - Status resource (CPU, Memory, Disk) host\n"
+        "/cache - Metrik data intelligence cache global\n"
+        "/metrics - Konversi email & success rate\n"
+        "/logs - Tampilkan 15 baris terakhir file log"
     )
     await update.message.reply_text(help_text, parse_mode="HTML")
 
-
 # ----------------- SYSTEM & CORE COMMAND HANDLERS -----------------
 
-@admin_only
 @error_boundary
 async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
     await update.message.reply_text("🔍 <i>Memulai scraping dan matching AI...</i>", parse_mode="HTML")
     new_jobs = await job_service.run_scraping_and_matching()
     
-    # Run the company discovery and career crawling engine as part of search
+    # Run the company discovery and career crawling engine globally
     await update.message.reply_text("🏢 <i>Menjalankan Crawler Perusahaan & Harvester Email...</i>", parse_mode="HTML")
     try:
         await discovery_engine.discover_companies()
@@ -170,65 +186,68 @@ async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as ce:
         logger.error(f"Error during company crawling: {ce}")
 
-    if new_jobs:
-        await update.message.reply_text(f"✅ Scraping selesai! Menemukan {len(new_jobs)} lowongan baru rekomendasi.")
-        for job in new_jobs:
-            text = format_job_message(job)
+    # Extract jobs recommended specifically for this user
+    user_recs = [job for uid, job in new_jobs if uid == user_id]
+
+    if user_recs:
+        await update.message.reply_text(f"✅ Scraping selesai! Menemukan {len(user_recs)} lowongan baru rekomendasi untuk CV Anda.")
+        for job in user_recs:
+            text = format_job_message(job, user_id)
             keyboard = get_job_keyboard(job, is_fav=False)
             await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
     else:
         await update.message.reply_text("✅ Scraping selesai! Tidak ada lowongan baru yang direkomendasikan saat ini.")
 
-@admin_only
 @error_boundary
 async def latest_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    jobs = await job_service.get_latest_jobs(limit=10, recommended_only=True)
+    user_id = update.effective_user.id
+    jobs = await job_service.get_latest_jobs(user_id=user_id, limit=10, recommended_only=True)
     if not jobs:
         await update.message.reply_text("📭 Tidak ada lowongan rekomendasi terbaru di database.")
         return
         
-    await update.message.reply_text("📋 <b>Daftar 10 Lowongan Rekomendasi Terbaru:</b>", parse_mode="HTML")
+    await update.message.reply_text("📋 <b>Daftar 10 Lowongan Magang Rekomendasi Terbaru:</b>", parse_mode="HTML")
     for job in jobs:
-        text = format_job_message(job)
+        text = format_job_message(job, user_id)
         keyboard = get_job_keyboard(job, is_fav=False)
         await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
-@admin_only
 @error_boundary
 async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Check completeness of user CV, portfolio, cover letter."""
+    user_id = update.effective_user.id
     async with async_session_maker() as session:
-        cv_text = await cv_service.get_active_cv_text(session)
+        cv_text = await cv_service.get_active_cv_text(session, user_id)
         
         # Check portfolio
-        p_stmt = select(Portfolio).order_by(desc(Portfolio.uploaded_at)).limit(1)
+        p_stmt = select(Portfolio).where(Portfolio.user_id == user_id).limit(1)
         p_res = await session.execute(p_stmt)
         portfolio = p_res.scalar_one_or_none()
         
         # Check cover letter
-        cl_stmt = select(CoverLetter).order_by(desc(CoverLetter.uploaded_at)).limit(1)
+        cl_stmt = select(CoverLetter).where(CoverLetter.user_id == user_id).limit(1)
         cl_res = await session.execute(cl_stmt)
         cl = cl_res.scalar_one_or_none()
 
-    cv_display = cv_text[:500] + "..." if cv_text else "Default CV Profile (Julian - SMK Negeri 2 Bekasi)"
-    portfolio_display = "Belum diatur"
+    cv_display = cv_text[:500] + "..." if cv_text else "Belum diatur. Silakan unggah CV Anda menggunakan /uploadcv."
+    portfolio_display = "Belum diatur. Atur menggunakan /uploadportfolio."
     if portfolio:
         portfolio_display = portfolio.github_url or portfolio.website_url or portfolio.file_path or "Tersimpan"
         
-    cl_display = cl.text[:150] + "..." if cl else "Belum diatur"
+    cl_display = cl.text[:150] + "..." if cl else "Belum diatur. Atur menggunakan /uploadcoverletter."
 
     profile_text = (
-        "👤 <b>Profil Pelamar Aktif:</b>\n\n"
-        f"📄 <b>CV Teks Preview:</b>\n<i>{cv_display}</i>\n\n"
+        "👤 <b>Profil Pelamar Anda:</b>\n\n"
+        f"📄 <b>Preview Teks CV:</b>\n<code>{cv_display}</code>\n\n"
         f"🌐 <b>Portfolio:</b> <code>{portfolio_display}</code>\n"
-        f"✉️ <b>Cover Letter:</b> <code>{cl_display}</code>"
+        f"✍️ <b>Template Cover Letter:</b> <i>{cl_display}</i>"
     )
     await update.message.reply_text(profile_text, parse_mode="HTML")
 
-@admin_only
 @error_boundary
 async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     config_text = (
-        "⚙️ <b>Konfigurasi Sistem Aktif:</b>\n\n"
+        "⚙️ <b>Konfigurasi Sistem Aktif (Global):</b>\n\n"
         f"🔑 OpenRouter Model: <code>{settings.OPENROUTER_MODEL}</code>\n"
         f"⏱ Interval Cek: <code>{settings.CHECK_INTERVAL_MINUTES} Menit</code>\n"
         f"🎯 Threshold Skor: <code>{settings.SCORE_THRESHOLD}</code>\n"
@@ -238,53 +257,49 @@ async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
     await update.message.reply_text(config_text, parse_mode="HTML")
 
-@admin_only
 @error_boundary
 async def favorites_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    jobs = await job_service.get_favorites()
+    user_id = update.effective_user.id
+    jobs = await job_service.get_favorites(user_id=user_id)
     if not jobs:
         await update.message.reply_text("⭐ Belum ada lowongan terfavorit.")
         return
         
     await update.message.reply_text("⭐ <b>Lowongan Terfavorit Anda:</b>", parse_mode="HTML")
     for job in jobs:
-        text = format_job_message(job)
+        text = format_job_message(job, user_id)
         keyboard = get_job_keyboard(job, is_fav=True)
         await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
-@admin_only
 @error_boundary
 async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    history = await job_service.get_history(limit=10)
+    user_id = update.effective_user.id
+    history = await job_service.get_history(user_id=user_id, limit=10)
     if not history:
         await update.message.reply_text("📭 Riwayat aksi kosong.")
         return
         
-    text = "📋 <b>Riwayat Aksi Terakhir:</b>\n\n"
+    text = "📋 <b>Riwayat Aksi Terakhir Anda:</b>\n\n"
     for job, hist in history:
         text += f"• <code>[{hist.created_at.strftime('%d/%m %H:%M')}]</code> {job.company_name} - {job.title}: <b>{hist.action.upper()}</b> ({hist.details or ''})\n"
         
     await update.message.reply_text(text, parse_mode="HTML")
 
-@admin_only
 @error_boundary
 async def recheck_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
     await update.message.reply_text("🔄 <i>Memulai evaluasi ulang semua lowongan terhadap CV aktif...</i>", parse_mode="HTML")
-    newly_recommended = await job_service.recheck_all_jobs()
+    newly_recommended = await job_service.recheck_all_jobs(user_id=user_id)
     await update.message.reply_text(f"✅ Evaluasi ulang selesai! {len(newly_recommended)} lowongan kini direkomendasikan.")
 
-# ----------------- CV / PORTFOLIO UPLOADS -----------------
-
-@admin_only
 @error_boundary
 async def uploadcv_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["state"] = "AWAITING_CV"
     await update.message.reply_text(
-        "📂 <b>Kirim file CV Anda (PDF atau DOCX)</b> untuk digunakan oleh pencocokan AI.",
+        "📄 <b>Unggah File CV Anda</b>\n\nKirimkan file CV Anda dalam format PDF atau DOCX:",
         parse_mode="HTML"
     )
 
-@admin_only
 @error_boundary
 async def uploadportfolio_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["state"] = "AWAITING_PORTFOLIO"
@@ -293,7 +308,6 @@ async def uploadportfolio_handler(update: Update, context: ContextTypes.DEFAULT_
         parse_mode="HTML"
     )
 
-@admin_only
 @error_boundary
 async def uploadcoverletter_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["state"] = "AWAITING_COVER_LETTER"
@@ -304,7 +318,6 @@ async def uploadcoverletter_handler(update: Update, context: ContextTypes.DEFAUL
 
 # ----------------- SMTP CONFIGS (CONVERSATIONAL STATE) -----------------
 
-@admin_only
 @error_boundary
 async def credentials_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["state"] = "SMTP_HOST"
@@ -333,23 +346,18 @@ async def health_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # 2. OpenRouter check
     or_status = "OK"
-    fallback_status = "OK"
     try:
         success, msg, latency = await evaluator.verify_connectivity()
         if not success:
             or_status = f"WARNING ({msg})"
-            fallback_status = "WARNING"
-        else:
-            or_status = f"OK ({latency} ms)"
     except Exception as e:
         or_status = f"FAILED ({str(e)})"
-        fallback_status = "FAILED"
 
-    # 3. SMTP Check
+    # 3. SMTP Check (Admin default SMTP config verify)
     smtp_status = "Not Configured"
     try:
         async with async_session_maker() as session:
-            config = await email_service.get_active_config(session)
+            config = await email_service.get_active_config(session, settings.TELEGRAM_ADMIN_ID)
             if config:
                 await email_service.test_smtp_config(config)
                 smtp_status = "OK"
@@ -373,24 +381,189 @@ async def health_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"SMTP ............ <code>{smtp_status}</code>\n"
         f"OpenRouter ...... <code>{or_status}</code>\n"
         f"Primary Model ... <code>{settings.PRIMARY_MODEL}</code>\n"
-        f"Fallback ........ <code>{fallback_status}</code>\n"
-        f"Scheduler ....... <code>{sched_status}</code>\n"
-        f"Scrapers ........ <code>{enabled_scrapers_count} enabled</code>"
+        f"Scrapers Active . <code>{enabled_scrapers_count}/{len(job_service.scrapers)}</code>\n"
+        f"Scheduler ....... <code>{sched_status}</code>"
     )
     await update.message.reply_text(health_report, parse_mode="HTML")
 
 @admin_only
 @error_boundary
-async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def models_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Lists current OpenRouter model configurations, latencies, and fallback queue status."""
+    await update.message.reply_text("🔎 <i>Mengambil status model OpenRouter...</i>", parse_mode="HTML")
+    success, msg, latency = await evaluator.verify_connectivity()
+    primary = settings.PRIMARY_MODEL
+    fallbacks = settings.fallback_models_list
+    
+    status_str = "🟢 AKTIF" if success else f"🔴 GANGGUAN ({msg})"
+    latency_str = f"{latency:.2f}s" if latency > 0 else "N/A"
+    
+    text = (
+        "🤖 <b>OpenRouter Model Routing & Diagnostics:</b>\n\n"
+        f"<b>Model Utama (Primary):</b>\n"
+        f"- Nama: <code>{primary}</code>\n"
+        f"- Status: <code>{status_str}</code>\n"
+        f"- Latensi: <code>{latency_str}</code>\n\n"
+        f"<b>Model Cadangan (Fallbacks):</b>\n"
+    )
+    for model in fallbacks:
+        text += f"- <code>{model}</code>\n"
+        
+    await update.message.reply_text(text, parse_mode="HTML")
+
+@admin_only
+@error_boundary
+async def providers_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Lists scraper providers, their current health state, and total jobs scraped."""
+    text = "🕵️‍♂️ <b>Scraper Providers & Health Scoring:</b>\n\n"
+    for scraper in job_service.scrapers:
+        status = "🔴 DISABLED (403)" if getattr(scraper, "is_disabled", False) else "🟢 HEALTHY"
+        text += (
+            f"• <b>{scraper.source_name}</b>\n"
+            f"  - Status: <code>{status}</code>\n"
+            f"  - Keyphrase: <code>{settings.SEARCH_KEYWORDS}</code>\n"
+        )
+    await update.message.reply_text(text, parse_mode="HTML")
+
+@admin_only
+@error_boundary
+async def migrations_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Displays Alembic migration history, current database revision, and pending updates."""
+    from app.database.migrations import get_revisions
     try:
-        stats = await job_service.get_db_stats()
+        curr, head = get_revisions()
+        text = (
+            "⚙️ <b>Alembic Database Migrations:</b>\n\n"
+            f"• Revisi Aktif (Current): <code>{curr or 'None (Fresh)'}</code>\n"
+            f"• Revisi Kepala (HEAD):   <code>{head}</code>\n\n"
+            f"Status: " + ("🟢 Database fully up-to-date." if curr == head else "🟡 Pending migrations exist. Run startup to apply.")
+        )
+        await update.message.reply_text(text, parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Gagal mengambil status migrasi: {e}")
+
+@admin_only
+@error_boundary
+async def schema_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Verifies that the database schema precisely matches the SQLAlchemy ORM models."""
+    from app.database.migrations import verify_database_schema
+    await update.message.reply_text("🔍 <i>Memverifikasi skema database terhadap ORM metadata...</i>", parse_mode="HTML")
+    
+    success = verify_database_schema()
+    if success:
+        await update.message.reply_text("🟢 <b>Integritas Skema: OK</b>\nSemua tabel, kolom, index, dan constraint tervalidasi dengan benar.", parse_mode="HTML")
+    else:
+        await update.message.reply_text("🔴 <b>Peringatan Integritas Skema: MISMATCH</b>\nTerdapat ketidaksesuaian antara skema database aktual dan model ORM.", parse_mode="HTML")
+
+@admin_only
+@error_boundary
+async def doctor_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Runs a complete test suite check across all subsystems, recommending hotfixes."""
+    await update.message.reply_text("🩺 <i>Menjalankan Platform Doctor Diagnostics...</i>", parse_mode="HTML")
+    
+    report = "🩺 <b>Platform Doctor Diagnostic Report:</b>\n\n"
+    
+    # 1. DB Check
+    try:
+        async with async_session_maker() as session:
+            await session.execute(select(1))
+        report += "✅ <b>Database:</b> Terkoneksi (SQLite Async)\n"
+    except Exception as e:
+        report += f"❌ <b>Database:</b> GAGAL ({e})\n👉 Periksa path data/jobs.db dan izin file.\n"
+        
+    # 2. OpenRouter Check
+    success, or_msg, latency = await evaluator.verify_connectivity()
+    if success:
+        report += f"✅ <b>OpenRouter AI:</b> Terkoneksi (Latensi: {latency:.2f}s)\n"
+    else:
+        report += f"❌ <b>OpenRouter AI:</b> GAGAL ({or_msg})\n👉 Periksa OPENROUTER_API_KEY di file .env.\n"
+        
+    # 3. Cache & Filesystem
+    db_path = "data/jobs.db"
+    if os.path.exists(db_path):
+        report += f"✅ <b>Filesystem:</b> database file exists ({os.path.getsize(db_path) / 1024:.1f} KB)\n"
+    else:
+        report += "❌ <b>Filesystem:</b> file database jobs.db tidak ditemukan.\n"
+        
+    await update.message.reply_text(report, parse_mode="HTML")
+
+@admin_only
+@error_boundary
+async def system_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Displays host resources (CPU, Memory, Disk) and runtime container environments."""
+    import shutil
+    import psutil
+    
+    total, used, free = shutil.disk_usage(".")
+    disk_free_gb = free / (2**30)
+    disk_used_pct = (used / total) * 100
+    
+    memory = psutil.virtual_memory()
+    cpu_pct = psutil.cpu_percent()
+    
+    text = (
+        "🖥 <b>Host System Resource Metrics:</b>\n\n"
+        f"• <b>CPU Usage:</b> <code>{cpu_pct}%</code>\n"
+        f"• <b>RAM Usage:</b> <code>{memory.percent}%</code> (Free: {memory.available / (1024**2):.1f} MB)\n"
+        f"• <b>Disk Space:</b> <code>{disk_used_pct:.1f}% used</code> (Free: {disk_free_gb:.1f} GB)\n"
+        f"• <b>Active Threads:</b> <code>{psutil.Process().num_threads()}</code>"
+    )
+    await update.message.reply_text(text, parse_mode="HTML")
+
+@admin_only
+@error_boundary
+async def cache_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Displays stats on cached intelligence (stored job listings, analyzed profiles)."""
+    async with async_session_maker() as session:
+        jobs_count = await session.scalar(select(func.count(Job.id)))
+        comp_count = await session.scalar(select(func.count(Company.id)))
+        scores_count = await session.scalar(select(func.count(AIScore.id)))
+        
+    text = (
+        "💾 <b>Cached Intelligence Metrics:</b>\n\n"
+        f"• Lowongan Tersimpan: <code>{jobs_count}</code>\n"
+        f"• Perusahaan Terindeks: <code>{comp_count}</code>\n"
+        f"• Match Score Terkalkulasi: <code>{scores_count}</code>\n\n"
+        "💡 <i>Kecerdasan perusahaan dan lowongan disimpan secara global untuk menghindari konsumsi token OpenRouter duplikat.</i>"
+    )
+    await update.message.reply_text(text, parse_mode="HTML")
+
+@admin_only
+@error_boundary
+async def metrics_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Displays application conversion and operational success metrics."""
+    async with async_session_maker() as session:
+        sent_emails = await session.scalar(select(func.count(EmailQueue.id)).where(EmailQueue.status == "sent"))
+        failed_emails = await session.scalar(select(func.count(EmailQueue.id)).where(EmailQueue.status == "failed"))
+        total_rec = await session.scalar(select(func.count(AIScore.id)).where(AIScore.recommended.is_(True)))
+        
+    sent_count = sent_emails if sent_emails is not None else 0
+    failed_count = failed_emails if failed_emails is not None else 0
+    total_emails = sent_count + failed_count
+    success_rate = (sent_count / total_emails * 100) if total_emails > 0 else 0.0
+    
+    text = (
+        "📈 <b>SaaS Conversion & Operation Metrics:</b>\n\n"
+        f"• Total Rekomendasi Magang: <code>{total_rec}</code>\n"
+        f"• Email Pengiriman Dikirim: <code>{sent_emails}</code>\n"
+        f"• Email Pengiriman Gagal:  <code>{failed_emails}</code>\n"
+        f"• SMTP Delivery Success:     <code>{success_rate:.1f}%</code>"
+    )
+    await update.message.reply_text(text, parse_mode="HTML")
+
+@admin_only
+@error_boundary
+async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    try:
+        stats = await job_service.get_db_stats(user_id=user_id)
         
         async with async_session_maker() as session:
             comp_count = await session.scalar(select(func.count(Company.id)))
             disc_comp = await session.scalar(select(func.count(Company.id)).where(Company.is_discovered.is_(True)))
             emails_count = await session.scalar(select(func.count(Company.id)).where(Company.recruitment_email.is_not(None)))
-            drafts = await session.scalar(select(func.count(EmailQueue.id)).where(EmailQueue.status == "draft"))
-            sent = await session.scalar(select(func.count(EmailQueue.id)).where(EmailQueue.status == "sent"))
+            drafts = await session.scalar(select(func.count(EmailQueue.id)).where((EmailQueue.status == "draft") & (EmailQueue.user_id == user_id)))
+            sent = await session.scalar(select(func.count(EmailQueue.id)).where((EmailQueue.status == "sent") & (EmailQueue.user_id == user_id)))
 
         stats_text = (
             "📊 <b>PKL Finder - Dashboard Otonom</b>\n\n"
@@ -400,7 +573,7 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"💼 Total Lowongan Magang: <code>{stats['total_jobs']}</code>\n"
             f"🎯 Lolos Evaluasi AI: <code>{stats['recommended_jobs']}</code>\n"
             f"⭐ Lowongan Favorit: <code>{stats['favorites_count']}</code>\n\n"
-            f"✉️ <b>Status Aplikasi Email:</b>\n"
+            f"✉️ <b>Status Aplikasi Email Anda:</b>\n"
             f"- Draft Pending Persetujuan: <code>{drafts}</code>\n"
             f"- Email Berhasil Terkirim: <code>{sent}</code>"
         )
@@ -436,12 +609,12 @@ async def logs_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 # ----------------- EMAIL QUEUE ACTIONS -----------------
 
-@admin_only
 @error_boundary
 async def queue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """List pending drafts in the approval queue."""
+    """List pending drafts in the user's approval queue."""
+    user_id = update.effective_user.id
     async with async_session_maker() as session:
-        stmt = select(EmailQueue).options(selectinload(EmailQueue.company)).where(EmailQueue.status == "draft").limit(5)
+        stmt = select(EmailQueue).options(selectinload(EmailQueue.company)).where((EmailQueue.status == "draft") & (EmailQueue.user_id == user_id)).limit(5)
         res = await session.execute(stmt)
         drafts = res.scalars().all()
 
@@ -471,13 +644,13 @@ async def queue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
 
-@admin_only
 @error_boundary
 async def sendall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
     await update.message.reply_text("⏳ <i>Mulai mendispatch semua email approved...</i>", parse_mode="HTML")
     
     async with async_session_maker() as session:
-        stmt = select(EmailQueue).where(EmailQueue.status == "approved")
+        stmt = select(EmailQueue).where((EmailQueue.status == "approved") & (EmailQueue.user_id == user_id))
         res = await session.execute(stmt)
         approved_emails = res.scalars().all()
         
@@ -501,9 +674,6 @@ async def sendall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             parse_mode="HTML"
         )
 
-# ----------------- MSG DISCOVERY & BROWSER -----------------
-
-@admin_only
 @error_boundary
 async def companies_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     async with async_session_maker() as session:
@@ -515,12 +685,30 @@ async def companies_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await update.message.reply_text("📭 Tidak ada perusahaan terdaftar.")
             return
             
-        comp_text = "🏢 <b>Daftar Perusahaan Diselidiki:</b>\n\n"
+        comp_text = "🏢 <b>Daftar Perusahaan Diselidiki (Global):</b>\n\n"
         for comp in companies:
             status = "📧" if comp.recruitment_email else "🌐"
             comp_text += f"{status} {comp.name} (<a href='{comp.website}'>Website</a>)\n"
             
         await update.message.reply_text(comp_text, parse_mode="HTML", disable_web_page_preview=True)
+
+@error_boundary
+async def openapplications_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Lists companies where a recruitment email is discovered, ready for Open Applications."""
+    async with async_session_maker() as session:
+        stmt = select(Company).where(Company.recruitment_email.is_not(None)).limit(15)
+        res = await session.execute(stmt)
+        companies = res.scalars().all()
+        
+        if not companies:
+            await update.message.reply_text("📭 Tidak ada perusahaan dengan email rekrutmen untuk Open Application.")
+            return
+            
+        comp_text = "📧 <b>Open Application Opportunities:</b>\n\n"
+        for comp in companies:
+            comp_text += f"• <b>{comp.name}</b>\n  Email: <code>{comp.recruitment_email}</code>\n"
+            
+        await update.message.reply_text(comp_text, parse_mode="HTML")
 
 # ----------------- GENERIC DOCUMENT / TEXT INPUTS -----------------
 
@@ -533,11 +721,12 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     doc = update.message.document
     file_info = await doc.get_file()
     file_bytes = await file_info.download_as_bytearray()
+    user_id = update.effective_user.id
 
     async with async_session_maker() as session:
         if state == "AWAITING_CV":
             try:
-                await cv_service.save_cv(session, doc.file_name, bytes(file_bytes))
+                await cv_service.save_cv(session, user_id, doc.file_name, bytes(file_bytes))
                 await update.message.reply_text("✅ <b>CV Berhasil Diunggah!</b> Teks berhasil diekstrak untuk pencocokan AI.", parse_mode="HTML")
             except Exception as e:
                 await update.message.reply_text(f"❌ Gagal memproses CV: {e}")
@@ -545,15 +734,23 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 context.user_data["state"] = None
                 
         elif state == "AWAITING_PORTFOLIO":
-            # Save file path reference
             os.makedirs("data/portfolios", exist_ok=True)
             local_path = os.path.join("data/portfolios", doc.file_name)
             with open(local_path, "wb") as f:
                 f.write(bytes(file_bytes))
                 
-            portfolio = Portfolio(file_path=local_path)
-            session.add(portfolio)
+            # Check if portfolio already exists for user to avoid unique key violation
+            stmt = select(Portfolio).where(Portfolio.user_id == user_id)
+            res = await session.execute(stmt)
+            portfolio = res.scalar_one_or_none()
+            if portfolio:
+                portfolio.file_path = local_path
+                portfolio.uploaded_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            else:
+                portfolio = Portfolio(user_id=user_id, file_path=local_path)
+                session.add(portfolio)
             await session.commit()
+            
             await update.message.reply_text("✅ <b>File Portfolio Berhasil Diunggah!</b>", parse_mode="HTML")
             context.user_data["state"] = None
 
@@ -564,6 +761,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     text = update.message.text.strip()
+    user_id = update.effective_user.id
     
     # 1. SMTP Setup States
     if state == "SMTP_HOST":
@@ -602,9 +800,6 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data["state"] = "SMTP_SENDER"
         await update.message.reply_text("👤 Masukkan Nama Pengirim (Sender Display Name):")
 
-    elif state == "SMTP_USER":
-        pass # state falls through
-
     elif state == "SMTP_SENDER":
         context.user_data["smtp_setup"]["sender_name"] = text
         context.user_data["state"] = "SMTP_SIG"
@@ -616,6 +811,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             async with async_session_maker() as session:
                 await email_service.configure_smtp(
                     session=session,
+                    user_id=user_id,
                     host=setup["host"],
                     port=setup["port"],
                     username=setup["username"],
@@ -634,8 +830,23 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     # 2. Portfolio URL state
     elif state == "AWAITING_PORTFOLIO":
         async with async_session_maker() as session:
-            portfolio = Portfolio(github_url=text if "github" in text else None, website_url=text if "github" not in text else None)
-            session.add(portfolio)
+            stmt = select(Portfolio).where(Portfolio.user_id == user_id)
+            res = await session.execute(stmt)
+            portfolio = res.scalar_one_or_none()
+            
+            if portfolio:
+                if "github" in text:
+                    portfolio.github_url = text
+                else:
+                    portfolio.website_url = text
+                portfolio.uploaded_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            else:
+                portfolio = Portfolio(
+                    user_id=user_id,
+                    github_url=text if "github" in text else None,
+                    website_url=text if "github" not in text else None
+                )
+                session.add(portfolio)
             await session.commit()
         await update.message.reply_text("✅ <b>URL Portfolio Berhasil Disimpan!</b>", parse_mode="HTML")
         context.user_data["state"] = None
@@ -643,8 +854,15 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     # 3. Cover Letter template
     elif state == "AWAITING_COVER_LETTER":
         async with async_session_maker() as session:
-            cl = CoverLetter(text=text)
-            session.add(cl)
+            stmt = select(CoverLetter).where(CoverLetter.user_id == user_id)
+            res = await session.execute(stmt)
+            cl = res.scalar_one_or_none()
+            if cl:
+                cl.text = text
+                cl.uploaded_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            else:
+                cl = CoverLetter(user_id=user_id, text=text)
+                session.add(cl)
             await session.commit()
         await update.message.reply_text("✅ <b>Template Cover Letter Berhasil Disimpan!</b>", parse_mode="HTML")
         context.user_data["state"] = None
@@ -653,7 +871,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     elif state.startswith("AWAITING_EDIT_BODY:"):
         draft_id = int(state.split(":")[1])
         async with async_session_maker() as session:
-            stmt = select(EmailQueue).where(EmailQueue.id == draft_id)
+            stmt = select(EmailQueue).where((EmailQueue.id == draft_id) & (EmailQueue.user_id == user_id))
             res = await session.execute(stmt)
             draft = res.scalar_one_or_none()
             if draft:
@@ -666,40 +884,37 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    if not query or not query.data:
-        return
-        
     await query.answer()
-    
-    if query.from_user.id != settings.TELEGRAM_ADMIN_ID:
+
+    if not query.data:
         return
 
     data = query.data
+    user_id = query.from_user.id
+    
     try:
         action, entity_id_str = data.split(":")
         entity_id = int(entity_id_str)
         
         async with async_session_maker() as session:
             if action in ["fav", "unfav"]:
-                # Favorite operations
-                stmt = select(Job).options(selectinload(Job.ai_score)).where(Job.id == entity_id)
+                stmt = select(Job).options(selectinload(Job.ai_scores)).where(Job.id == entity_id)
                 res = await session.execute(stmt)
                 job = res.scalar_one_or_none()
                 if not job:
                     return
 
                 if action == "fav":
-                    success = await job_service.add_favorite(entity_id)
+                    success = await job_service.add_favorite(user_id, entity_id)
                     if success:
                         await query.edit_message_reply_markup(reply_markup=get_job_keyboard(job, is_fav=True))
                 elif action == "unfav":
-                    success = await job_service.remove_favorite(entity_id)
+                    success = await job_service.remove_favorite(user_id, entity_id)
                     if success:
                         await query.edit_message_reply_markup(reply_markup=get_job_keyboard(job, is_fav=False))
 
             elif action == "approve":
-                # Queue approval operations
-                email_stmt = select(EmailQueue).where(EmailQueue.id == entity_id)
+                email_stmt = select(EmailQueue).where((EmailQueue.id == entity_id) & (EmailQueue.user_id == user_id))
                 res = await session.execute(email_stmt)
                 draft = res.scalar_one_or_none()
                 if draft:
@@ -708,8 +923,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     await query.edit_message_text(f"✅ <b>Draft Email Disetujui (Approved)</b>\nReady to send to: <code>{draft.recipient_email}</code>", parse_mode="HTML")
             
             elif action == "reject":
-                # Queue rejection
-                email_stmt = select(EmailQueue).where(EmailQueue.id == entity_id)
+                email_stmt = select(EmailQueue).where((EmailQueue.id == entity_id) & (EmailQueue.user_id == user_id))
                 res = await session.execute(email_stmt)
                 draft = res.scalar_one_or_none()
                 if draft:
@@ -718,8 +932,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     await query.edit_message_text(f"❌ <b>Draft Email Ditolak (Rejected)</b>\nRecipient: <code>{draft.recipient_email}</code>", parse_mode="HTML")
 
             elif action == "send":
-                # Instant send
-                email_stmt = select(EmailQueue).where(EmailQueue.id == entity_id)
+                email_stmt = select(EmailQueue).where((EmailQueue.id == entity_id) & (EmailQueue.user_id == user_id))
                 res = await session.execute(email_stmt)
                 draft = res.scalar_one_or_none()
                 if draft:
@@ -732,7 +945,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                         await query.edit_message_text(f"❌ <b>Gagal mengirim email:</b> <code>{str(se)}</code>", parse_mode="HTML")
 
             elif action == "edit_draft":
-                # Trigger edit conversation
                 context.user_data["state"] = f"AWAITING_EDIT_BODY:{entity_id}"
                 await query.message.reply_text(
                     "✏️ <b>Kirimkan konten body email baru untuk menggantikan draft saat ini:</b>",
@@ -741,6 +953,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     except Exception as e:
         logger.error(f"Error handling callback button: {e}", exc_info=True)
+
+async def email_handler_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    async with async_session_maker() as session:
+        config = await email_service.get_active_config(session, user_id)
+    if config:
+        await update.message.reply_text(f"📧 <b>SMTP Terkonfigurasi:</b>\nHost: <code>{config.host}</code>\nPort: <code>{config.port}</code>\nUser: <code>{config.username}</code>", parse_mode="HTML")
+    else:
+        await update.message.reply_text("📭 SMTP belum dikonfigurasi. Jalankan /credentials.")
 
 def setup_bot(application) -> None:
     """Registers all commands and handlers with the PTB Application."""
@@ -759,7 +980,7 @@ def setup_bot(application) -> None:
     
     # SMTP configs
     application.add_handler(CommandHandler("credentials", credentials_handler))
-    application.add_handler(CommandHandler("email", settings_handler if False else email_handler_fallback if False else start_handler)) # mapping to settings or configs
+    application.add_handler(CommandHandler("email", email_handler_fallback))
     
     # Email queue management
     application.add_handler(CommandHandler("queue", queue_handler))
@@ -774,6 +995,17 @@ def setup_bot(application) -> None:
     application.add_handler(CommandHandler("history", history_handler))
     application.add_handler(CommandHandler("recheck", recheck_handler))
     application.add_handler(CommandHandler("companies", companies_handler))
+    application.add_handler(CommandHandler("openapplications", openapplications_handler))
+    
+    # Admin commands (Subsystem Specifics)
+    application.add_handler(CommandHandler("models", models_handler))
+    application.add_handler(CommandHandler("providers", providers_handler))
+    application.add_handler(CommandHandler("migrations", migrations_handler))
+    application.add_handler(CommandHandler("schema", schema_handler))
+    application.add_handler(CommandHandler("doctor", doctor_handler))
+    application.add_handler(CommandHandler("system", system_handler))
+    application.add_handler(CommandHandler("cache", cache_handler))
+    application.add_handler(CommandHandler("metrics", metrics_handler))
     
     # Document upload parsing message router
     application.add_handler(MessageHandler(filters.Document.ALL, document_handler))
@@ -783,12 +1015,3 @@ def setup_bot(application) -> None:
     
     # Buttons callbacks
     application.add_handler(CallbackQueryHandler(callback_handler))
-
-# Helper to bypass command overrides
-async def email_handler_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    async with async_session_maker() as session:
-        config = await email_service.get_active_config(session)
-    if config:
-        await update.message.reply_text(f"📧 <b>SMTP Terkonfigurasi:</b>\nHost: <code>{config.host}</code>\nPort: <code>{config.port}</code>\nUser: <code>{config.username}</code>", parse_mode="HTML")
-    else:
-        await update.message.reply_text("📭 SMTP belum dikonfigurasi. Jalankan /credentials.")

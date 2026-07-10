@@ -31,13 +31,13 @@ async def scheduled_scrape_and_match() -> None:
                 
                 # Using async context manager for standalone Bot connection lifecycle
                 async with bot:
-                    for job in new_jobs:
+                    for user_id, job in new_jobs:
                         try:
-                            text = format_job_message(job)
+                            text = format_job_message(job, user_id)
                             keyboard = get_job_keyboard(job, is_fav=False)
                             
                             await bot.send_message(
-                                chat_id=settings.TELEGRAM_ADMIN_ID,
+                                chat_id=user_id,
                                 text=text,
                                 reply_markup=keyboard,
                                 parse_mode="HTML"
@@ -46,7 +46,7 @@ async def scheduled_scrape_and_match() -> None:
                             await asyncio.sleep(0.5)
                             
                         except Exception as send_err:
-                            logger.error(f"Failed to send Telegram notification for job ID {job.id}: {send_err}")
+                            logger.error(f"Failed to send Telegram notification for job ID {job.id} to user {user_id}: {send_err}")
             else:
                 logger.info("Scheduled task finished. No new recommended jobs found.")
                 

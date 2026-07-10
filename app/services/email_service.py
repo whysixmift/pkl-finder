@@ -53,6 +53,7 @@ class EmailService:
     async def configure_smtp(
         self,
         session: AsyncSession,
+        user_id: int,
         host: str,
         port: int,
         username: str,
@@ -61,7 +62,7 @@ class EmailService:
         sender_name: str,
         signature: str
     ) -> SMTPConfig:
-        """Saves and validates SMTP credentials."""
+        """Saves and validates SMTP credentials for a user."""
         # Validate encryption type
         encryption_type = encryption_type.upper()
         if encryption_type not in ["SSL", "TLS", "NONE"]:
@@ -69,31 +70,43 @@ class EmailService:
 
         encrypted_pwd = encrypt_password(password)
 
-        # Deactivate previous active configs
-        await session.execute(
-            SMTPConfig.__table__.update().values(is_active=False)
-        )
+        # Check if config already exists for user
+        stmt = select(SMTPConfig).where(SMTPConfig.user_id == user_id)
+        res = await session.execute(stmt)
+        config = res.scalar_one_or_none()
 
-        config = SMTPConfig(
-            host=host,
-            port=port,
-            username=username,
-            password_encrypted=encrypted_pwd,
-            encryption_type=encryption_type,
-            sender_name=sender_name,
-            signature=signature,
-            is_active=True
-        )
-        session.add(config)
+        if config:
+            config.host = host
+            config.port = port
+            config.username = username
+            config.password_encrypted = encrypted_pwd
+            config.encryption_type = encryption_type
+            config.sender_name = sender_name
+            config.signature = signature
+            config.is_active = True
+        else:
+            config = SMTPConfig(
+                user_id=user_id,
+                host=host,
+                port=port,
+                username=username,
+                password_encrypted=encrypted_pwd,
+                encryption_type=encryption_type,
+                sender_name=sender_name,
+                signature=signature,
+                is_active=True
+            )
+            session.add(config)
+
         await session.commit()
         
         # Verify connectivity
         await self.test_smtp_config(config)
         return config
 
-    async def get_active_config(self, session: AsyncSession) -> Optional[SMTPConfig]:
-        """Fetch active SMTP configuration."""
-        stmt = select(SMTPConfig).where(SMTPConfig.is_active.is_(True)).limit(1)
+    async def get_active_config(self, session: AsyncSession, user_id: int) -> Optional[SMTPConfig]:
+        """Fetch active SMTP configuration for a user."""
+        stmt = select(SMTPConfig).where((SMTPConfig.user_id == user_id) & (SMTPConfig.is_active.is_(True))).limit(1)
         res = await session.execute(stmt)
         return res.scalar_one_or_none()
 
@@ -118,6 +131,7 @@ class EmailService:
     async def queue_email_draft(
         self,
         session: AsyncSession,
+        user_id: int,
         company_id: int,
         recipient_email: str,
         subject: str,
@@ -126,8 +140,9 @@ class EmailService:
         job_id: Optional[int] = None,
         attachments: Optional[List[str]] = None
     ) -> EmailQueue:
-        """Saves a generated email draft to the queue."""
+        """Saves a generated email draft to the queue for a user."""
         draft = EmailQueue(
+            user_id=user_id,
             company_id=company_id,
             job_id=job_id,
             recipient_email=recipient_email,
@@ -151,12 +166,12 @@ class EmailService:
         if not email or email.status in ["sent", "sending"]:
             return False
 
-        config = await self.get_active_config(session)
+        config = await self.get_active_config(session, email.user_id)
         if not config:
             email.status = "failed"
-            email.error_message = "SMTP Credentials not configured."
+            email.error_message = f"SMTP Credentials not configured for user {email.user_id}."
             await session.commit()
-            raise ValueError("SMTP Config is missing. Configure SMTP via Telegram.")
+            raise ValueError(f"SMTP Config is missing for user {email.user_id}. Configure SMTP via Telegram.")
 
         email.status = "sending"
         await session.commit()

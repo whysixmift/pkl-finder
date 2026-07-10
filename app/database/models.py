@@ -7,7 +7,7 @@ class Base(DeclarativeBase):
     pass
 
 class Company(Base):
-    """Company details including discovered properties and career portals."""
+    """Company details including discovered properties and career portals (Global)."""
     __tablename__ = "companies"
     
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -30,7 +30,7 @@ class Company(Base):
     emails: Mapped[List["EmailQueue"]] = relationship("EmailQueue", back_populates="company", cascade="all, delete-orphan")
 
 class Job(Base):
-    """Job vacancy details scraped or crawl-detected."""
+    """Job vacancy details scraped or crawl-detected (Global)."""
     __tablename__ = "jobs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -52,8 +52,8 @@ class Job(Base):
 
     # Relationships
     company: Mapped[Optional[Company]] = relationship("Company", back_populates="jobs")
-    ai_score: Mapped[Optional["AIScore"]] = relationship(
-        "AIScore", back_populates="job", cascade="all, delete-orphan", uselist=False
+    ai_scores: Mapped[List["AIScore"]] = relationship(
+        "AIScore", back_populates="job", cascade="all, delete-orphan"
     )
     favorites: Mapped[List["Favorite"]] = relationship(
         "Favorite", back_populates="job", cascade="all, delete-orphan"
@@ -69,11 +69,12 @@ class Job(Base):
     )
 
 class AIScore(Base):
-    """AI evaluation metadata and criteria matching records."""
+    """AI evaluation metadata (User-Specific)."""
     __tablename__ = "ai_scores"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    job_id: Mapped[int] = mapped_column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"), unique=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
+    job_id: Mapped[int] = mapped_column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"))
     recommended: Mapped[bool] = mapped_column(Boolean, default=False)
     score: Mapped[int] = mapped_column(Integer, index=True)
     reason: Mapped[str] = mapped_column(Text)
@@ -88,26 +89,38 @@ class AIScore(Base):
     )
 
     # Relationships
-    job: Mapped["Job"] = relationship("Job", back_populates="ai_score")
+    job: Mapped[Job] = relationship("Job", back_populates="ai_scores")
+
+    # Composite index to enforce unique matching per user-job pair
+    __table_args__ = (
+        Index("ix_ai_scores_user_job", "user_id", "job_id", unique=True),
+    )
 
 class Favorite(Base):
-    """Bookmarks for specific openings."""
+    """Bookmarks for specific openings (User-Specific)."""
     __tablename__ = "favorites"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    job_id: Mapped[int] = mapped_column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"), unique=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
+    job_id: Mapped[int] = mapped_column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
 
     # Relationships
-    job: Mapped["Job"] = relationship("Job", back_populates="favorites")
+    job: Mapped[Job] = relationship("Job", back_populates="favorites")
+
+    # Composite index to allow multiple users to favorite the same job
+    __table_args__ = (
+        Index("ix_favorites_user_job", "user_id", "job_id", unique=True),
+    )
 
 class History(Base):
-    """System event logging for tracked operations."""
+    """System event logging for tracked operations (User-Specific)."""
     __tablename__ = "history"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
     job_id: Mapped[int] = mapped_column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"))
     action: Mapped[str] = mapped_column(String(50))
     details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -116,13 +129,14 @@ class History(Base):
     )
 
     # Relationships
-    job: Mapped["Job"] = relationship("Job", back_populates="history")
+    job: Mapped[Job] = relationship("Job", back_populates="history")
 
 class CVProfile(Base):
-    """Stores CV text extracted from PDF or Docx uploads."""
+    """Stores CV text extracted from PDF or Docx uploads (User-Specific)."""
     __tablename__ = "cv_profiles"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=0, server_default="0", unique=True, index=True)
     filename: Mapped[str] = mapped_column(String(255))
     cv_text: Mapped[str] = mapped_column(Text)
     uploaded_at: Mapped[datetime] = mapped_column(
@@ -130,10 +144,11 @@ class CVProfile(Base):
     )
 
 class Portfolio(Base):
-    """Tracks portfolio details, websites, and files."""
+    """Tracks portfolio details, websites, and files (User-Specific)."""
     __tablename__ = "portfolios"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=0, server_default="0", unique=True, index=True)
     github_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     website_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     file_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
@@ -142,20 +157,22 @@ class Portfolio(Base):
     )
 
 class CoverLetter(Base):
-    """Custom cover letters or text templates."""
+    """Custom cover letters or text templates (User-Specific)."""
     __tablename__ = "cover_letters"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=0, server_default="0", unique=True, index=True)
     text: Mapped[str] = mapped_column(Text)
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
 
 class SMTPConfig(Base):
-    """Encrypted configurations for mail delivery services."""
+    """Encrypted configurations for mail delivery services (User-Specific)."""
     __tablename__ = "smtp_configs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=0, server_default="0", unique=True, index=True)
     host: Mapped[str] = mapped_column(String(255))
     port: Mapped[int] = mapped_column(Integer)
     username: Mapped[str] = mapped_column(String(255))
@@ -166,10 +183,11 @@ class SMTPConfig(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 class EmailQueue(Base):
-    """Stores draft emails waiting for approval, and records application delivery history."""
+    """Stores draft emails waiting for approval (User-Specific)."""
     __tablename__ = "email_queue"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
     job_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True)
     company_id: Mapped[int] = mapped_column(Integer, ForeignKey("companies.id", ondelete="CASCADE"))
     recipient_email: Mapped[str] = mapped_column(String(255))

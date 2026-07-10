@@ -11,7 +11,7 @@ class KalibrrScraper(BaseScraper):
 
     async def scrape(self, keyword: str, location: str) -> List[Dict[str, Any]]:
         """Scrapes jobs from Kalibrr matching keyword and location."""
-        jobs = []
+        jobs: List[Dict[str, Any]] = []
         encoded_keyword = urllib.parse.quote(keyword)
         
         # Format the Kalibrr job board URL

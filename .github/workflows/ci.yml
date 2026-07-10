@@ -22,7 +22,20 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip install ruff mypy
         
-    - name: Run unit tests
+    - name: Run Linting Checks
       run: |
-        python -m pytest
+        ruff check .
+        
+    - name: Run Type Checking
+      run: |
+        mypy --ignore-missing-imports .
+        
+    - name: Run Unit Tests
+      run: |
+        python -m pytest -W ignore::DeprecationWarning
+        
+    - name: Build Docker Image
+      run: |
+        docker build -t pkl-finder-bot .

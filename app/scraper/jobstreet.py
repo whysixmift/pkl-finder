@@ -12,7 +12,7 @@ class JobstreetScraper(BaseScraper):
 
     async def scrape(self, keyword: str, location: str) -> List[Dict[str, Any]]:
         """Scrapes jobs from Jobstreet (SEEK platform) using JSON extraction and HTML parsing."""
-        jobs = []
+        jobs: List[Dict[str, Any]] = []
         encoded_keyword = urllib.parse.quote(keyword)
         
         # Jobstreet search URL structure

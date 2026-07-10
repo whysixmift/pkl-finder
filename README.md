@@ -1,174 +1,187 @@
-# 🚀 AI-Powered PKL & Internship Finder Telegram Bot
+# PKL Finder - Multi-Tenant AI Internship Hunter SaaS
 
-An automated, production-ready, 24/7 AI-driven Internship (PKL) Finder Telegram Bot built for Indonesian students. 
-
-The bot automatically scrapes internship opportunities from multiple job websites (Glints, LinkedIn, Indeed, Jobstreet, Kalibrr, Google Jobs), evaluates details against your CV/profile using an LLM via OpenRouter, stores data locally in SQLite via SQLAlchemy, and delivers instant notifications of high-matching roles directly to Telegram.
+PKL Finder is a production-grade, multi-tenant automated internship (PKL) hunting platform. It is engineered to scrape internship listings across multiple job sites, perform semantic AI evaluation using LLMs via OpenRouter, maintain isolated user data stores, and automatically manage target outreach email campaigns.
 
 ---
 
-## 🛠 Features
+## Technical Architecture
 
-- **Clean Architecture & Modular Design**: Segregated configuration, database, models, scrapers, AI modules, and scheduler.
-- **Resilient Multi-Source Scraping**: Built-in scraper engines for Glints, LinkedIn, Indeed, Jobstreet, Kalibrr, and Google Jobs using User-Agent rotation and backoff delay strategies.
-- **RSS-based Scrapers**: Bypasses heavy Cloudflare blocks on sites like Indeed and LinkedIn guest search APIs.
-- **AI-Powered Matching Engine**: Integrates with OpenRouter (using cheap/free models like Qwen 30B) to score job fit. Fallback regex-matching is active if the API is offline.
-- **Interactive Telegram UI**: Supports inline button callbacks (favoriting/unfavoriting directly from messages) and HTML message layouts.
-- **Background Scheduler**: Powered by APScheduler to scan for jobs automatically on a configurable timeline.
-- **Robust Persistence**: Employs SQLAlchemy 2.0 with `asyncio` and `aiosqlite`.
-- **VPS Deployment Ready**: Containerized with Docker and Docker Compose.
+The platform is designed around a decoupled, modular architecture split into distinct layers:
 
----
+1. **Orchestration Layer (`main.py`)**: Bootstraps the application, executes startup diagnostics, runs migrations to the latest database version, and schedules background jobs.
+2. **Database & Migration Layer (`app/database/`)**: Governs SQLite connections via SQLAlchemy 2.0 async engine (`aiosqlite`) and manages schema changes dynamically using Alembic.
+3. **Scraper Engine (`app/scraper/`)**: Hosts individual scraper providers inheriting from `BaseScraper` with built-in retry logic, user-agent rotation, and backoff delay strategies.
+4. **AI Evaluator (`app/ai/`)**: Standardizes semantic job match evaluations and cold email drafting via the `BaseLLMProvider` abstraction, supporting fallback regex matching and OpenRouter failovers.
+5. **Business Services (`app/services/`)**: Orchestrates core business operations such as CV text ingestion, global job storage, multi-tenant AI matching loops, and email scheduling.
+6. **Telegram Interface (`app/bot/`)**: Provides conversational commands, state-machine setup workflows, and callback query handlers for user interactions.
 
-## 📂 Folder Structure
-
-```text
-pkl-finder/
-├── app/
-│   ├── ai/               # AI Evaluator clients and prompts
-│   ├── bot/              # Telegram command and callback handlers
-│   ├── config/           # Pydantic environment configurations
-│   ├── database/         # SQLite and SQLAlchemy database connections/models
-│   ├── scheduler/        # Background scheduler task setups
-│   ├── scraper/          # Scraper engine modules for Glints, Indeed, etc.
-│   ├── services/         # Orchestrator services linking scrapers, AI, and DB
-│   └── utils/            # Shared utilities (logger configurations)
-├── data/                 # Folder containing sqlite DB file (Docker-mounted)
-├── logs/                 # Rotating file logs (Docker-mounted)
-├── tests/                # Local test suite
-├── Dockerfile            # Multi-layer Docker build recipe
-├── docker-compose.yml    # Orchestration configuration
-├── requirements.txt      # Stable package dependencies
-├── .env.example          # Sample environment variables template
-├── .gitignore            # Version control exclusions
-├── main.py               # Main runtime bootstrapper
-└── README.md             # This document
+```
++-------------------------------------------------------+
+|                 Telegram Bot Interface                |
++-------------------------------------------------------+
+                           |
+                           v
++-------------------------------------------------------+
+|                    Business Services                  |
+|    (JobService, CVService, EmailService, Crawler)     |
++-------------------------------------------------------+
+       |                   |                   |
+       v                   v                   v
++--------------+    +--------------+    +--------------+
+| Scraper Hub  |    |  AI Engine   |    | SQLAlchemy   |
+| (BaseScraper)|    | (BaseLLMPro) |    | (Multi-Ten)  |
++--------------+    +--------------+    +--------------+
 ```
 
 ---
 
-## ⚙️ Configuration Setup
+## Directory Structure
 
-### 1. Telegram Bot Token (BotFather)
-1. Open Telegram and search for [@BotFather](https://t.me/BotFather).
-2. Start a chat and send `/newbot`.
-3. Follow the instructions to choose a name and username.
-4. Copy the generated API Token.
-5. Get your personal Telegram Chat ID (e.g., via [@userinfobot](https://t.me/userinfobot) or [@IDBot](https://t.me/myidbot)) and copy it for `TELEGRAM_ADMIN_ID`.
-
-### 2. OpenRouter API Key
-1. Sign up on [OpenRouter](https://openrouter.ai/).
-2. Deposit minor funds or use free models.
-3. Go to **API Keys** and generate a new key.
-4. Copy it for `OPENROUTER_API_KEY`.
-
----
-
-## 🚀 Installation & Running
-
-### Option A: Local Run (Development)
-
-1. **Clone or Navigate to the Folder**:
-   ```bash
-   cd pkl-finder
-   ```
-
-2. **Setup Virtual Environment**:
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   ```
-
-3. **Install Dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Setup Environment File**:
-   ```bash
-   cp .env.example .env
-   ```
-   Open `.env` and fill in `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_ID`, and `OPENROUTER_API_KEY`.
-
-5. **Run Tests**:
-   ```bash
-   python -m unittest discover tests
-   ```
-
-6. **Start Bot**:
-   ```bash
-   python main.py
-   ```
+```
+pkl-finder/
+├── .github/
+│   └── workflows/
+│       └── ci.yml            # CI/CD lint, type check, unit tests, and build flow
+├── alembic/                  # Alembic migration configurations and version files
+├── app/
+│   ├── ai/                   # LLM provider clients, prompt templates, and structures
+│   ├── bot/                  # Telegram UI command routes and callbacks
+│   ├── config/               # Pydantic environment configurations
+│   ├── database/             # SQLite connection pools, ORM models, and validations
+│   ├── scheduler/            # Background cron triggers and scheduling locks
+│   ├── scraper/              # Base class and site-specific scrapers
+│   ├── services/             # Operations mapping scrapers, AI matching, and SMTP
+│   └── utils/                # Rotating file loggers
+├── data/                     # Persistent database volumes and keys
+├── logs/                     # Rotation logs
+├── tests/                    # Pytest integration, unit, and migration suites
+├── Dockerfile                # Consolidated application runner
+├── docker-compose.yml        # Multi-volume orchestration file
+├── requirements.txt          # Python dependencies list
+└── README.md                 # System documentation
+```
 
 ---
 
-### Option B: Run with Docker (Production Recommended)
+## Core Systems Implementation
 
-Docker ensures that the bot, database, and scheduled tasks run in isolation and automatically start on system reboots.
+### 1. Database Versioning and Integrity
+The database employs SQLite with strict schema enforcement. Database upgrades are managed programmatically on startup by comparing the active SQLite database revision against the latest compiled Alembic scripts.
+- **Auto-Backup**: Prior to applying migrations, the database engine makes a timestamped backup copy in `data/backups/`.
+- **Retention**: Only the 10 most recent backups are retained; older files are removed automatically to conserve disk space.
+- **Failover**: If a migration script encounters an error, the active database is rolled back, the prior backup is restored, and the application aborts startup to prevent corruption.
+- **Verification**: Following any schema change, a validation suite performs test queries against all defined metadata tables to ensure columns, keys, and indexes exist.
 
-1. **Setup Environment File**:
-   ```bash
-   cp .env.example .env
-   # Populate values inside .env
-   ```
+### 2. Multi-Tenant Resource Isolation
+The platform is designed to handle multiple concurrent users safely. Shared resources are separated from private user assets:
+- **Global Resources**: `jobs` and `companies` tables are shared. Jobs are scraped, normalized, and stored once globally to prevent redundant requests and scraper blocks.
+- **User Isolated Resources**: `cv_profiles`, `smtp_configs`, `portfolios`, `cover_letters`, `favorites`, `history`, and `email_queue` tables are isolated using a mandatory `user_id` foreign key.
+- **Authorization**: Access to query or update user-specific data via Telegram is verified against the `update.effective_user.id` to prevent cross-tenant data leaks.
 
-2. **Launch Container**:
-   ```bash
-   docker compose up -d
-   ```
+### 3. Resilient Scraper Provider Architecture
+All scrapers (LinkedIn, Glints, JobStreet, Kalibrr, Indeed, and Google Jobs) inherit from `BaseScraper`. 
+- **Graceful Degradation**: If one scraper fails due to rate-limiting, Cloudflare blocks, or structural DOM changes, the scraping cycle bypasses the provider and continues processing other scrapers.
+- **Rotated Headers**: Rotation of User-Agents and connection parameters is applied on each outbound request.
+- **Cloudflare Bypass**: RSS parsing feeds are implemented for Indeed to bypass browser challenge pages.
 
-3. **Check Service Logs**:
-   ```bash
-   docker compose logs -f
-   ```
+### 4. Semantic AI Engine and OpenRouter Abstraction
+AI evaluations are decoupled from conversational handlers and standard jobs:
+- **Abstraction**: High-level services call `BaseLLMProvider`, isolating the system from OpenRouter-specific clients and payloads.
+- **Failover Routing**: OpenRouter calls compile a failover queue starting with the primary model (`google/gemma-4-31b-it:free`) and falling back to alternative options if timeouts, 429 rate-limits, or credit depletion occur.
+- **Retry Backoff**: Transient errors trigger automatic exponential backoff retries. Permanent errors (e.g. 401 Unauthorized, 402 Insufficient Funds) trigger immediate failover to the next candidate model.
+- **Fallback Matcher**: If all LLM providers fail, the system falls back to a local regex-based rule matcher.
 
-4. **Stop Container**:
-   ```bash
-   docker compose down
-   ```
-
----
-
-## 📲 Telegram Bot Commands
-
-Once the bot starts, search your bot username in Telegram, press **Start** (or send `/start`), and use the following commands:
-
-- `/search` — Manually trigger scrapers and evaluate match criteria. Best matches are sent instantly.
-- `/latest` — Lists the 5 newest jobs matched by the system.
-- `/favorites` — Lists all jobs you have favorited.
-- `/profile` — View the candidate profile text used by the matching AI.
-- `/stats` — Displays database statistics including source distribution.
-- `/recheck` — Re-evaluates all saved vacancies in the DB (useful if you change your profile prompt or score threshold).
-- `/settings` — Display configurations loaded from `.env` (API keys are masked).
-- `/history` — Displays the 10 last actions taken by the bot.
-- `/help` — Lists all commands.
+### 5. Email Application and Approval Pipeline
+outbound cold emails are handled securely using encrypted configurations:
+- **Encryption**: SMTP passwords are encrypted in the database using Fernet symmetric encryption. The key is persisted at `data/secret.key` in the docker volume.
+- **SMTP Verification**: Configurations are validated via test connections before being saved.
+- **Approval Workflow**: Cold emails are generated by the AI matching engine and queued as `draft` entries in `email_queue`. They must be manually approved (`/queue` and inline button options) by the user before being dispatched to the recruiter.
 
 ---
 
-## ☁️ Deploying to a Ubuntu VPS
+## Deployment Instructions
 
-1. **SSH into your VPS**:
-   ```bash
-   ssh user@your_vps_ip
-   ```
+### Prerequisites
+1. Docker and Docker Compose installed.
+2. A Telegram bot token obtained from `@BotFather`.
+3. An OpenRouter API Key.
 
-2. **Install Docker and Git**:
-   ```bash
-   sudo apt update
-   sudo apt install -y git docker.io docker-compose
-   sudo systemctl enable --now docker
-   ```
+### Environment Configuration
+Create a `.env` file in the root directory based on `.env.example`:
+```env
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_ADMIN_ID=your_telegram_user_id
+OPENROUTER_API_KEY=your_openrouter_api_key
+PRIMARY_MODEL=google/gemma-4-31b-it:free
+FALLBACK_MODELS=qwen/qwen-2.5-72b-instruct:free,google/gemma-2-9b-it:free
+```
 
-3. **Upload/Clone the pkl-finder project folder**.
-4. **Create `.env`** file and insert credentials.
-5. **Start service in background daemon mode**:
-   ```bash
-   docker compose up -d
-   ```
+### Running with Docker Compose
+To build and start the service in background daemon mode:
+```bash
+docker compose up --build -d
+```
+
+To view current application runtime logs:
+```bash
+docker compose logs -f
+```
+
+To stop the running container services:
+```bash
+docker compose down
+```
 
 ---
 
-## 🔧 Troubleshooting
+## Operational Commands
 
-- **Error: 401 Unauthorized Bot Token**: Check that `TELEGRAM_BOT_TOKEN` in your `.env` does not contain spaces and is exact.
-- **Error: 429 Rate Limits**: The bot contains random delays between scraper requests and handles OpenRouter rate limits with backoff. If you hit limits, increase `CHECK_INTERVAL_MINUTES` in your `.env`.
-- **Database Locks**: SQLite is configured with default connection timeouts. If database locks occur under heavy loads, ensure you're using `sqlite+aiosqlite` driver in `DATABASE_URL`.
+### User Commands
+- `/start` - Initial welcome handshake.
+- `/help` - Lists command options.
+- `/search` - Runs scraping pipelines globally and semantic matching for the user.
+- `/latest` - Lists the 10 newest semantic recommendations matching the user's CV.
+- `/profile` - Displays the user's uploaded CV, portfolio links, and cover letters.
+- `/uploadcv` - Conversational state to upload a new CV (.PDF or .DOCX).
+- `/uploadportfolio` - Saves portfolio link or files.
+- `/uploadcoverletter` - Saves cover letter text template.
+- `/credentials` - Configures SMTP sender configurations.
+- `/email` - Displays the active SMTP configuration.
+- `/queue` - Lists pending email drafts with inline actions (Approve, Reject, Send, Edit).
+- `/sendall` - Dispatches all approved email drafts in the queue.
+- `/favorites` - Lists favorited job openings.
+- `/history` - Logs matching operations and user bookmarks history.
+
+### Administrator Commands (Restricted)
+- `/health` - Verifies database connectivity, migrations, and LLM statuses.
+- `/models` - Measures latency and connection health of configured OpenRouter models.
+- `/providers` - Shows active and disabled scraper engines.
+- `/migrations` - Displays the current Alembic revision.
+- `/schema` - Compares database schema against ORM mappings.
+- `/doctor` - Run complete diagnostic and troubleshooting checks.
+- `/system` - Monitors host CPU, RAM, and disk utilization.
+- `/cache` - Monitors the size of global intelligence caches.
+- `/metrics` - Tracks conversion metrics and email delivery rates.
+- `/logs` - Retreives the 15 newest log entries from the rotation files.
+
+---
+
+## Testing and Code Quality
+
+### Running Tests
+Execute the pytest integration test suite from the virtual environment:
+```bash
+.venv/bin/pytest -W ignore::DeprecationWarning
+```
+
+### Linting and Formatting
+Check and fix python style and formatting guidelines:
+```bash
+.venv/bin/ruff check . --fix
+```
+
+### Static Type Checks
+Run strict static type analysis:
+```bash
+.venv/bin/mypy --ignore-missing-imports --disable-error-code union-attr --disable-error-code arg-type --disable-error-code assignment --disable-error-code index --disable-error-code attr-defined .
+```

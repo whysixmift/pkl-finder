@@ -1,13 +1,13 @@
 import json
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Tuple
 from sqlalchemy import select, func, desc
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
 from app.config.settings import settings
 from app.database.db import async_session_maker
-from app.database.models import Job, AIScore, Company, Favorite, History
+from app.database.models import Job, AIScore, Company, Favorite, History, CVProfile
 from app.ai.evaluator import evaluator
 from app.services.cv_service import cv_service
 from app.scraper import (
@@ -35,18 +35,21 @@ class JobService:
         """Generate a unique SHA-256 hash representing the job URL."""
         return hashlib.sha256(url.encode("utf-8")).hexdigest()
 
-    async def run_scraping_and_matching(self) -> List[Job]:
-        """Runs scrapers, matches against candidate profile using AI, and saves to database."""
+    async def run_scraping_and_matching(self) -> List[Tuple[int, Job]]:
+        """Runs scrapers, saves global Job records, and matches them against user CVs.
+        Returns:
+            List[Tuple[user_id, Job]] newly recommended jobs per user.
+        """
         logger.info("Starting automated job scraping and matching cycle")
         all_scraped_jobs: List[Dict[str, Any]] = []
 
         keywords = settings.keywords_list
         locations = settings.locations_list
 
-        # Track scraper summary status (Issue 5)
+        # Track scraper execution summary
         scraper_stats: Dict[str, Any] = {}
 
-        # Execute scrapers across keywords and locations
+        # Run scrapers
         for scraper in self.scrapers:
             if getattr(scraper, "is_disabled", False):
                 scraper_stats[scraper.source_name] = "disabled (403)"
@@ -64,7 +67,6 @@ class JobService:
                     except Exception as e:
                         logger.error(f"Error executing scraper {scraper.source_name} for '{kw}' in '{loc}': {e}", exc_info=True)
             
-            # Record execution status
             if getattr(scraper, "is_disabled", False):
                 scraper_stats[scraper.source_name] = "disabled (403)"
             else:
@@ -77,22 +79,15 @@ class JobService:
         for j in all_scraped_jobs:
             unique_scraped[j["url"]] = j
 
-        newly_recommended_jobs: List[Job] = []
-        jobs_processed = 0
+        newly_inserted_jobs: List[Job] = []
         duplicate_skips = 0
 
+        # 1. Global Job Insertion (Scrape once, store once)
         async with async_session_maker() as session:
-            # Load dynamic CV text from DB
-            cv_text = await cv_service.get_active_cv_text(session)
-
             for url, raw_job in unique_scraped.items():
-                if jobs_processed >= settings.MAX_JOBS_PER_RUN:
-                    logger.info(f"Reached MAX_JOBS_PER_RUN limit ({settings.MAX_JOBS_PER_RUN}). Stopping evaluation loop.")
-                    break
-
                 job_key = self._generate_job_key(url)
 
-                # Check if job URL key already exists in DB
+                # Check if job exists in DB
                 stmt = select(Job).where(Job.job_key == job_key)
                 res = await session.execute(stmt)
                 existing_job = res.scalar_one_or_none()
@@ -100,7 +95,6 @@ class JobService:
                 if existing_job:
                     continue
 
-                # Prepare job insertion inside an atomic savepoint to catch composite duplicates (Issue 9)
                 try:
                     async with session.begin_nested():
                         # Fetch or create company record
@@ -112,9 +106,8 @@ class JobService:
                         if not company:
                             company = Company(name=company_name)
                             session.add(company)
-                            await session.flush() # Populate ID
+                            await session.flush()
 
-                        # Insert Job record
                         new_job = Job(
                             job_key=job_key,
                             title=raw_job["title"],
@@ -131,74 +124,102 @@ class JobService:
                         )
                         session.add(new_job)
                         await session.flush()
+                        newly_inserted_jobs.append(new_job)
 
                 except IntegrityError:
-                    # Enforce unique index (title + company + location) block (Issue 9)
                     duplicate_skips += 1
-                    logger.debug(f"Duplicate job skipped by index constraint: {raw_job['title']} at {raw_job['company']}")
+                    logger.debug(f"Duplicate job skipped: {raw_job['title']} at {raw_job['company']}")
                     continue
-
-                # AI Matching evaluation using dynamic CV text
-                try:
-                    eval_result = await evaluator.evaluate_job(
-                        title=new_job.title,
-                        company=new_job.company_name,
-                        location=new_job.location,
-                        description=new_job.description,
-                        cv_text=cv_text
-                    )
-
-                    ai_score = AIScore(
-                        job_id=new_job.id,
-                        recommended=eval_result.recommended,
-                        score=eval_result.score,
-                        reason=json.dumps(eval_result.reason),
-                        matched_skills=json.dumps(eval_result.matched_skills),
-                        missing_skills=json.dumps(eval_result.missing_skills),
-                        summary=eval_result.summary,
-                        company_category=eval_result.company_category,
-                        work_mode=eval_result.work_mode,
-                        priority=eval_result.priority
-                    )
-                    session.add(ai_score)
-
-                    # Create History log
-                    history_entry = History(
-                        job_id=new_job.id,
-                        action="evaluated",
-                        details=f"Score: {ai_score.score}. Recommended: {ai_score.recommended}",
-                    )
-                    session.add(history_entry)
-
-                    if ai_score.recommended and ai_score.score >= settings.SCORE_THRESHOLD:
-                        newly_recommended_jobs.append(new_job)
-
-                except Exception as eval_err:
-                    logger.error(f"Error evaluating job {new_job.title} with AI: {eval_err}", exc_info=True)
-                    # Create failed history log
-                    history_entry = History(
-                        job_id=new_job.id,
-                        action="evaluation_failed",
-                        details=str(eval_err),
-                    )
-                    session.add(history_entry)
-
-                jobs_processed += 1
 
             await session.commit()
 
-        # Eager load AI scores for recommendations before returning
+        logger.info(f"Stored {len(newly_inserted_jobs)} new global jobs in database.")
+
+        if not newly_inserted_jobs:
+            self._log_structured_summary(scraper_stats, len(unique_scraped), duplicate_skips, 0)
+            return []
+
+        # 2. User-Specific Matching (Perform matching afterwards)
+        final_user_recommendations: List[Tuple[int, Job]] = []
+
         async with async_session_maker() as session:
-            final_recommended = []
-            for j in newly_recommended_jobs:
-                stmt = select(Job).options(selectinload(Job.ai_score)).where(Job.id == j.id)
+            # Query all active users with custom CV profiles
+            stmt = select(CVProfile)
+            res = await session.execute(stmt)
+            cv_profiles: List[CVProfile] = list(res.scalars().all())
+
+            # Fallback to the main administrator if no users are registered yet
+            if not cv_profiles:
+                default_cv_text = "SMK Negeri 2 Bekasi Software Engineering. Python, C++, Embedded Systems, IoT, Robotics."
+                mock_admin_cv = CVProfile(user_id=settings.TELEGRAM_ADMIN_ID, filename="default", cv_text=default_cv_text)
+                cv_profiles = [mock_admin_cv]
+
+            for cv_profile in cv_profiles:
+                uid = cv_profile.user_id
+                cv_text = cv_profile.cv_text
+                logger.info(f"Processing AI matches for User ID: {uid}")
+
+                for job in newly_inserted_jobs[:settings.MAX_JOBS_PER_RUN]:
+                    try:
+                        eval_result = await evaluator.evaluate_job(
+                            title=job.title,
+                            company=job.company_name,
+                            location=job.location,
+                            description=job.description,
+                            cv_text=cv_text
+                        )
+
+                        # Insert user-specific AI score
+                        ai_score = AIScore(
+                            user_id=uid,
+                            job_id=job.id,
+                            recommended=eval_result.recommended,
+                            score=eval_result.score,
+                            reason=json.dumps(eval_result.reason),
+                            matched_skills=json.dumps(eval_result.matched_skills),
+                            missing_skills=json.dumps(eval_result.missing_skills),
+                            summary=eval_result.summary,
+                            company_category=eval_result.company_category,
+                            work_mode=eval_result.work_mode,
+                            priority=eval_result.priority
+                        )
+                        session.add(ai_score)
+
+                        # Log to user history
+                        history = History(
+                            user_id=uid,
+                            job_id=job.id,
+                            action="evaluated",
+                            details=f"Score: {ai_score.score}. Recommended: {ai_score.recommended}",
+                        )
+                        session.add(history)
+
+                        if ai_score.recommended and ai_score.score >= settings.SCORE_THRESHOLD:
+                            final_user_recommendations.append((uid, job))
+
+                    except Exception as eval_err:
+                        logger.error(f"Error matching job {job.title} for user {uid}: {eval_err}", exc_info=True)
+                        history = History(
+                            user_id=uid,
+                            job_id=job.id,
+                            action="evaluation_failed",
+                            details=str(eval_err),
+                        )
+                        session.add(history)
+
+            await session.commit()
+
+        # Eager load relationships before returning
+        async with async_session_maker() as session:
+            loaded_recommendations = []
+            for uid, j in final_user_recommendations:
+                stmt = select(Job).options(selectinload(Job.ai_scores)).where(Job.id == j.id)
                 res = await session.execute(stmt)
-                final_recommended.append(res.scalar_one())
+                job_loaded = res.scalar_one()
+                loaded_recommendations.append((uid, job_loaded))
 
-            # Print structured summary report (Issue 5)
-            self._log_structured_summary(scraper_stats, len(unique_scraped), duplicate_skips, len(newly_recommended_jobs))
-
-            return final_recommended
+            self._log_structured_summary(scraper_stats, len(unique_scraped), duplicate_skips, len(loaded_recommendations))
+            return loaded_recommendations
 
     def _log_structured_summary(self, scrapers: Dict[str, Any], unique_scraped: int, duplicate_skips: int, recommended: int) -> None:
         """Print clean concise summary report to INFO log."""
@@ -209,85 +230,91 @@ class JobService:
             summary += f"- {scraper_name:<12}: {status}\n"
         summary += f"\nUnique Crawled : {unique_scraped}\n"
         summary += f"Duplicates Skipped: {duplicate_skips}\n"
-        summary += f"AI Recommended    : {recommended} notifications sent\n"
+        summary += f"AI Recommended    : {recommended} notifications generated\n"
         summary += "=" * 50
         logger.info(summary)
 
-    async def get_latest_jobs(self, limit: int = 10, recommended_only: bool = False) -> List[Job]:
-        """Fetch newest jobs from database."""
+    async def get_latest_jobs(self, user_id: int, limit: int = 10, recommended_only: bool = False) -> List[Job]:
+        """Fetch newest jobs from database, populated with user-specific AI score matching."""
         async with async_session_maker() as session:
-            stmt = select(Job).options(selectinload(Job.ai_score)).order_by(desc(Job.created_at))
+            stmt = select(Job).outerjoin(AIScore, (Job.id == AIScore.job_id) & (AIScore.user_id == user_id)).options(selectinload(Job.ai_scores)).order_by(desc(Job.created_at))
             
             if recommended_only:
-                stmt = stmt.join(AIScore).where(AIScore.recommended.is_(True))
+                stmt = stmt.join(AIScore, (Job.id == AIScore.job_id) & (AIScore.user_id == user_id)).where(AIScore.recommended.is_(True))
                 
             stmt = stmt.limit(limit)
             res = await session.execute(stmt)
             return list(res.scalars().all())
 
-    async def get_favorites(self) -> List[Job]:
-        """Fetch all favorite jobs."""
+    async def get_favorites(self, user_id: int) -> List[Job]:
+        """Fetch all favorite jobs for a user."""
         async with async_session_maker() as session:
-            stmt = select(Job).options(selectinload(Job.ai_score)).join(Favorite).order_by(desc(Favorite.created_at))
+            stmt = (
+                select(Job)
+                .options(selectinload(Job.ai_scores))
+                .join(Favorite)
+                .where(Favorite.user_id == user_id)
+                .order_by(desc(Favorite.created_at))
+            )
             res = await session.execute(stmt)
             return list(res.scalars().all())
 
-    async def add_favorite(self, job_id: int) -> bool:
-        """Add a job to favorites."""
+    async def add_favorite(self, user_id: int, job_id: int) -> bool:
+        """Add a job to favorites for a user."""
         async with async_session_maker() as session:
-            # Check if job exists
             stmt = select(Job).where(Job.id == job_id)
             res = await session.execute(stmt)
             job = res.scalar_one_or_none()
             if not job:
                 return False
 
-            # Check if already favorite
-            fav_stmt = select(Favorite).where(Favorite.job_id == job_id)
+            # Check if already favorited
+            fav_stmt = select(Favorite).where((Favorite.user_id == user_id) & (Favorite.job_id == job_id))
             fav_res = await session.execute(fav_stmt)
             existing = fav_res.scalar_one_or_none()
             
             if not existing:
-                fav = Favorite(job_id=job_id)
+                fav = Favorite(user_id=user_id, job_id=job_id)
                 session.add(fav)
-                history = History(job_id=job_id, action="favorited")
+                history = History(user_id=user_id, job_id=job_id, action="favorited")
                 session.add(history)
                 await session.commit()
             return True
 
-    async def remove_favorite(self, job_id: int) -> bool:
-        """Remove a job from favorites."""
+    async def remove_favorite(self, user_id: int, job_id: int) -> bool:
+        """Remove a job from favorites for a user."""
         async with async_session_maker() as session:
-            stmt = select(Favorite).where(Favorite.job_id == job_id)
+            stmt = select(Favorite).where((Favorite.user_id == user_id) & (Favorite.job_id == job_id))
             res = await session.execute(stmt)
             fav = res.scalar_one_or_none()
             if fav:
                 await session.delete(fav)
-                history = History(job_id=job_id, action="unfavorited")
+                history = History(user_id=user_id, job_id=job_id, action="unfavorited")
                 session.add(history)
                 await session.commit()
                 return True
             return False
 
-    async def get_history(self, limit: int = 20) -> List[Tuple[Job, History]]:
-        """Fetch history log of recommended or interacted jobs."""
+    async def get_history(self, user_id: int, limit: int = 20) -> List[Tuple[Job, History]]:
+        """Fetch history log of recommended or interacted jobs for a user."""
         async with async_session_maker() as session:
             stmt = (
                 select(Job, History)
                 .join(History, Job.id == History.job_id)
-                .options(selectinload(Job.ai_score))
+                .options(selectinload(Job.ai_scores))
+                .where(History.user_id == user_id)
                 .order_by(desc(History.created_at))
                 .limit(limit)
             )
             res = await session.execute(stmt)
             return list(res.all())
 
-    async def get_db_stats(self) -> Dict[str, Any]:
-        """Fetch database statistics."""
+    async def get_db_stats(self, user_id: int) -> Dict[str, Any]:
+        """Fetch database statistics for a user."""
         async with async_session_maker() as session:
             total_jobs_stmt = select(func.count(Job.id))
-            rec_jobs_stmt = select(func.count(Job.id)).join(AIScore).where(AIScore.recommended.is_(True))
-            fav_jobs_stmt = select(func.count(Favorite.id))
+            rec_jobs_stmt = select(func.count(Job.id)).join(AIScore).where((AIScore.user_id == user_id) & (AIScore.recommended.is_(True)))
+            fav_jobs_stmt = select(func.count(Favorite.id)).where(Favorite.user_id == user_id)
             
             total_jobs = await session.execute(total_jobs_stmt)
             rec_jobs = await session.execute(rec_jobs_stmt)
@@ -305,19 +332,20 @@ class JobService:
                 "source_breakdown": source_breakdown,
             }
 
-    async def recheck_all_jobs(self) -> List[Job]:
-        """Re-runs AI evaluation on all existing jobs in the database."""
-        logger.info("Executing manual AI recheck on all database jobs")
+    async def recheck_all_jobs(self, user_id: int) -> List[Job]:
+        """Re-runs AI evaluation on all existing jobs in the database for a specific user."""
+        logger.info(f"Executing manual AI recheck on all database jobs for user {user_id}")
         updated_recommendations: List[Job] = []
         
         async with async_session_maker() as session:
-            # Fetch all jobs
-            stmt = select(Job).options(selectinload(Job.ai_score))
+            stmt = select(Job).options(selectinload(Job.ai_scores))
             res = await session.execute(stmt)
             jobs = res.scalars().all()
 
-            # Load CV text
-            cv_text = await cv_service.get_active_cv_text(session)
+            # Load CV text for this user
+            cv_text = await cv_service.get_active_cv_text(session, user_id)
+            if not cv_text:
+                cv_text = "SMK Negeri 2 Bekasi Software Engineering. Python, C++, Embedded Systems, IoT, Robotics."
 
             for job in jobs:
                 try:
@@ -329,19 +357,25 @@ class JobService:
                         cv_text=cv_text
                     )
 
-                    if job.ai_score:
-                        job.ai_score.recommended = eval_result.recommended
-                        job.ai_score.score = eval_result.score
-                        job.ai_score.reason = json.dumps(eval_result.reason)
-                        job.ai_score.matched_skills = json.dumps(eval_result.matched_skills)
-                        job.ai_score.missing_skills = json.dumps(eval_result.missing_skills)
-                        job.ai_score.summary = eval_result.summary
-                        job.ai_score.company_category = eval_result.company_category
-                        job.ai_score.work_mode = eval_result.work_mode
-                        job.ai_score.priority = eval_result.priority
-                        job.ai_score.evaluated_at = datetime.utcnow()
+                    # Check if user-specific AIScore already exists
+                    score_stmt = select(AIScore).where((AIScore.user_id == user_id) & (AIScore.job_id == job.id))
+                    score_res = await session.execute(score_stmt)
+                    ai_score = score_res.scalar_one_or_none()
+
+                    if ai_score:
+                        ai_score.recommended = eval_result.recommended
+                        ai_score.score = eval_result.score
+                        ai_score.reason = json.dumps(eval_result.reason)
+                        ai_score.matched_skills = json.dumps(eval_result.matched_skills)
+                        ai_score.missing_skills = json.dumps(eval_result.missing_skills)
+                        ai_score.summary = eval_result.summary
+                        ai_score.company_category = eval_result.company_category
+                        ai_score.work_mode = eval_result.work_mode
+                        ai_score.priority = eval_result.priority
+                        ai_score.evaluated_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     else:
                         ai_score = AIScore(
+                            user_id=user_id,
                             job_id=job.id,
                             recommended=eval_result.recommended,
                             score=eval_result.score,
@@ -357,6 +391,7 @@ class JobService:
 
                     # Log to history
                     history_entry = History(
+                        user_id=user_id,
                         job_id=job.id,
                         action="recheck_evaluated",
                         details=f"Recheck score: {eval_result.score}. Recommended: {eval_result.recommended}",
@@ -367,7 +402,7 @@ class JobService:
                         updated_recommendations.append(job)
 
                 except Exception as e:
-                    logger.error(f"Error rechecking job {job.id} - {job.title}: {e}", exc_info=True)
+                    logger.error(f"Error rechecking job {job.id} - {job.title} for user {user_id}: {e}", exc_info=True)
 
             await session.commit()
             

@@ -25,6 +25,7 @@ class TestDatabaseMigrations(unittest.IsolatedAsyncioTestCase):
         refresh_engine()
         # Resolve path and clean up test files
         self.db_path = get_db_file_path()
+        assert self.db_path is not None
         self.cleanup_files()
         
         # Ensure data folder exists

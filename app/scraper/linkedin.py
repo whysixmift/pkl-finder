@@ -11,7 +11,7 @@ class LinkedInScraper(BaseScraper):
 
     async def scrape(self, keyword: str, location: str) -> List[Dict[str, Any]]:
         """Scrapes jobs from LinkedIn Guest search endpoint."""
-        jobs = []
+        jobs: List[Dict[str, Any]] = []
         encoded_keyword = urllib.parse.quote(keyword)
         encoded_location = urllib.parse.quote(location or "Indonesia")
         

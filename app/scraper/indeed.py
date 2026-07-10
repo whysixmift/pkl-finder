@@ -16,7 +16,7 @@ class IndeedScraper(BaseScraper):
             logger.debug(f"[{self.source_name}] Scraper is disabled due to persistent 403 Forbidden blocks.")
             return []
 
-        jobs = []
+        jobs: List[Dict[str, Any]] = []
         encoded_keyword = urllib.parse.quote(keyword)
         
         # Indeed RSS feed endpoint

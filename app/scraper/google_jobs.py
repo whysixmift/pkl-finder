@@ -11,7 +11,7 @@ class GoogleJobsScraper(BaseScraper):
 
     async def scrape(self, keyword: str, location: str) -> List[Dict[str, Any]]:
         """Scrapes jobs by querying Google Search with specific parameters."""
-        jobs = []
+        jobs: List[Dict[str, Any]] = []
         # Construct a search query targeting job listings
         search_query = f"{keyword} internship magang {location}"
         encoded_query = urllib.parse.quote(search_query)
