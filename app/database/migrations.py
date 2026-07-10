@@ -111,6 +111,11 @@ def run_auto_migrations() -> None:
         logger.critical("Aborting startup: Failed to secure database backup.")
         sys.exit(1)
 
+    # Create sync engine for schema auditing
+    db_url = settings.DATABASE_URL
+    sync_url = db_url.replace("sqlite+aiosqlite:///", "sqlite:///")
+    engine = create_engine(sync_url)
+
     # 2. Revisions Check
     try:
         current_rev, head_rev = get_revisions()
@@ -124,6 +129,11 @@ def run_auto_migrations() -> None:
     # 3. Apply migrations if out of sync
     if current_rev != head_rev:
         logger.info("Alembic mismatch detected. Running upgrade...")
+        
+        # Run the SchemaDiff engine plan before Alembic executes
+        from app.database.schema_audit import run_schema_diff
+        run_schema_diff(engine)
+        
         alembic_cfg = Config("alembic.ini")
         try:
             command.upgrade(alembic_cfg, "head")
@@ -142,9 +152,6 @@ def run_auto_migrations() -> None:
             sys.exit(1)
 
     # 4. Perform post-migration schema validation (verify schemas, indexes, constraints, relationships)
-    db_url = settings.DATABASE_URL
-    sync_url = db_url.replace("sqlite+aiosqlite:///", "sqlite:///")
-    engine = create_engine(sync_url)
     
     from app.database.schema_audit import perform_schema_audit
     logger.info("Performing post-migration schema validation...")

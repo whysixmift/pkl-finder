@@ -154,6 +154,51 @@ def perform_schema_audit(engine) -> Tuple[bool, List[str]]:
 
     return success, report
 
+def run_schema_diff(engine) -> None:
+    """Inspects SQLite database structure, compares it with ORM metadata, and outputs a Migration Plan."""
+    inspector = inspect(engine)
+    db_tables = inspector.get_table_names()
+    
+    print("\n================= GENERATING SCHEMA MIGRATION PLAN ===============")
+    for table_name, orm_table in Base.metadata.tables.items():
+        print(f"\nTable: {table_name}")
+        
+        # Check table existence
+        if table_name not in db_tables:
+            print("ORM")
+            for col_name in orm_table.columns.keys():
+                print(f"  ✓ {col_name}")
+            print("SQLite")
+            print(f"  ✗ Table '{table_name}' does not exist")
+            print("Migration Plan")
+            print(f"  CREATE TABLE {table_name}")
+            continue
+            
+        sql_columns = {col['name']: col for col in inspector.get_columns(table_name)}
+        
+        # 1. ORM Columns listing
+        print("ORM")
+        for col_name in orm_table.columns.keys():
+            print(f"  ✓ {col_name}")
+            
+        # 2. SQLite Columns listing
+        print("SQLite")
+        for col_name in orm_table.columns.keys():
+            if col_name in sql_columns:
+                print(f"  ✓ {col_name}")
+            else:
+                print(f"  ✗ {col_name}")
+                
+        # 3. Migration Plan
+        print("Migration Plan")
+        for col_name in orm_table.columns.keys():
+            if col_name in sql_columns:
+                print(f"  SKIP {col_name}")
+            else:
+                print(f"  ADD {col_name}")
+                
+    print("==================================================================")
+
 def run_schema_audit() -> bool:
     """Executes schema audit and prints output report to stdout."""
     db_url = settings.DATABASE_URL

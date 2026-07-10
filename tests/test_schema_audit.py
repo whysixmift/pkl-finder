@@ -9,8 +9,8 @@ TEST_DB_FILE = "./data/test_schema_audit.db"
 TEST_DATABASE_URL = f"sqlite+aiosqlite:///{TEST_DB_FILE}"
 settings.DATABASE_URL = TEST_DATABASE_URL
 
-from app.database.db import init_db, refresh_engine
-from app.database.schema_audit import perform_schema_audit
+from app.database.db import init_db, refresh_engine  # noqa: E402
+from app.database.schema_audit import perform_schema_audit  # noqa: E402
 
 class TestSchemaAudit(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
