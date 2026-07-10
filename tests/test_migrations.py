@@ -17,9 +17,15 @@ from app.database.migrations import (  # noqa: E402
     create_db_backup,
     restore_backup,
     get_revisions,
-    verify_database_schema,
     run_auto_migrations
 )
+
+def verify_database_schema() -> bool:
+    from app.database.schema_audit import perform_schema_audit
+    from sqlalchemy import create_engine
+    engine = create_engine(settings.DATABASE_URL.replace("sqlite+aiosqlite:///", "sqlite:///"))
+    success, _ = perform_schema_audit(engine)
+    return success
 
 class TestDatabaseMigrations(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:

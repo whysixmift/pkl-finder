@@ -1,4 +1,6 @@
 import os
+import sys
+from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from app.config.settings import settings
 from app.database.models import Base
@@ -36,9 +38,10 @@ def refresh_engine() -> None:
 async def init_db() -> None:
     """Initialize database tables and run automatic migrations."""
     refresh_engine()
-    from app.database.migrations import run_auto_migrations, get_db_file_path, verify_database_schema
+    from app.database.migrations import run_auto_migrations, get_db_file_path
     from alembic.config import Config
     from alembic import command
+    from app.database.schema_audit import perform_schema_audit
     
     db_path = get_db_file_path()
     is_fresh = False
@@ -60,8 +63,16 @@ async def init_db() -> None:
             command.stamp(alembic_cfg, "head")
             logger.info("Database schema initialized and stamped at HEAD revision.")
             
-            # Verify table connectivity
-            verify_database_schema()
+            # Perform schema validation on fresh database
+            sync_url = settings.DATABASE_URL.replace("sqlite+aiosqlite:///", "sqlite:///")
+            sync_engine = create_engine(sync_url)
+            success, report = perform_schema_audit(sync_engine)
+            if not success:
+                logger.critical("Fresh database schema audit FAILED! Report:")
+                for line in report:
+                    logger.critical(line)
+                sys.exit(1)
+            logger.info("Fresh database verification SUCCESS.")
         else:
             # Existing database, execute programmatic migrations
             run_auto_migrations()

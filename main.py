@@ -9,10 +9,10 @@ from app.services.job_service import JobService
 from app.utils.logger import logger
 
 async def run_startup_diagnostics(application) -> None:
-    """Performs tests checking DB, Telegram, OpenRouter, and Scraper modules on boot (Issue 14)."""
+    """Performs tests checking DB, Telegram, SMTP, OpenRouter, and Scraper modules on boot (Issue 14)."""
     logger.info("Executing system startup diagnostics...")
     
-    # 1. DB connection check
+    # 1. DB connection & schema sync check
     db_status = "OK"
     try:
         await init_db()
@@ -44,13 +44,31 @@ async def run_startup_diagnostics(application) -> None:
     except Exception as e:
         or_status = f"FAILED ({str(e)})"
 
-    # 4. Scrapers Status mapping
+    # 4. SMTP Credentials check (Admin)
+    from app.services.email_service import email_service
+    from app.database.db import async_session_maker
+    smtp_status = "Not Configured"
+    async with async_session_maker() as session:
+        smtp_conf = await email_service.get_active_config(session, settings.TELEGRAM_ADMIN_ID)
+        if smtp_conf:
+            try:
+                await email_service.test_smtp_config(smtp_conf)
+                smtp_status = "OK"
+            except Exception as e:
+                smtp_status = f"FAILED ({str(e)})"
+                logger.error(f"Admin SMTP test connection failed: {e}")
+
+    # 5. Scrapers Status mapping
     job_service = JobService()
     scraper_lines = []
     for sc in job_service.scrapers:
         status = "Disabled (403)" if getattr(sc, "is_disabled", False) else "OK"
         scraper_lines.append(f"    * {sc.source_name:<14} : {status}")
     scrapers_summary = "\n".join(scraper_lines)
+
+    # 6. Company Discovery Engine check
+    from app.services.discovery_service import discovery_engine
+    discovery_status = "Disabled" if discovery_engine.is_disabled else "OK"
 
     # Print OpenRouter Health Check Block
     or_health = (
@@ -69,12 +87,14 @@ async def run_startup_diagnostics(application) -> None:
     grid = "\n" + "=" * 55 + "\n"
     grid += "          PKL FINDER STARTUP DIAGNOSTICS GRID\n"
     grid += "=" * 55 + "\n"
-    grid += f"[+] Database Engine   : {db_status}\n"
-    grid += f"[+] Telegram Bot API  : {tg_status} ({bot_username})\n"
-    grid += f"[+] OpenRouter Client : {or_status}\n"
-    grid += "[+] Scheduler Engine  : OK\n"
-    grid += f"[+] Configured Model  : {settings.PRIMARY_MODEL}\n"
-    grid += "[-] Scraper Statuses  :\n"
+    grid += f"[+] Database & ORM Sync : {db_status}\n"
+    grid += f"[+] Telegram Bot API    : {tg_status} ({bot_username})\n"
+    grid += f"[+] OpenRouter Client   : {or_status}\n"
+    grid += f"[+] Admin SMTP Delivery : {smtp_status}\n"
+    grid += "[+] Scheduler Engine    : OK\n"
+    grid += f"[+] Company Discovery   : {discovery_status}\n"
+    grid += f"[+] Configured Model    : {settings.PRIMARY_MODEL}\n"
+    grid += "[-] Scraper Statuses    :\n"
     grid += f"{scrapers_summary}\n"
     grid += "=" * 55
     logger.info(grid)

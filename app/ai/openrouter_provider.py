@@ -73,10 +73,16 @@ class OpenRouterProvider(BaseLLMProvider):
             return "Authentication failed (Invalid API Key)."
         elif status_code == 402:
             return "Insufficient account credits on OpenRouter."
+        elif status_code == 403:
+            return "Access forbidden. Check your API permissions or IP restrictions."
         elif status_code == 404:
             return "Model identifier not found or endpoint invalid."
+        elif status_code == 408:
+            return "Request timeout. The server took too long to respond."
         elif status_code == 429:
             return "Rate limit exceeded (Too many requests)."
+        elif status_code == 500:
+            return "Internal server error. OpenRouter encountered an issue."
         elif status_code in [502, 503, 504]:
             return "Upstream AI provider is currently offline or unreachable."
         return f"HTTP {status_code} - {text}"
@@ -124,7 +130,7 @@ class OpenRouterProvider(BaseLLMProvider):
                         response = await client.post(self.api_url, headers=self.headers, json=payload)
                         
                         # Handle permanent HTTP blockages by immediately falling back to next model
-                        if response.status_code in [401, 402, 404]:
+                        if response.status_code in [401, 402, 403, 404]:
                             err = self._parse_http_error(response.status_code, response.text)
                             logger.warning(f"Model {model} failed with permanent error: {err}. Trying fallback...")
                             last_error = err
@@ -138,9 +144,9 @@ class OpenRouterProvider(BaseLLMProvider):
                             backoff *= 2
                             continue
 
-                        # Handle temporary server errors
-                        if response.status_code >= 500:
-                            logger.warning(f"Server error ({response.status_code}) on {model}. Retrying in {backoff}s.")
+                        # Handle temporary server errors and timeouts
+                        if response.status_code == 408 or response.status_code >= 500:
+                            logger.warning(f"Temporary error ({response.status_code}) on {model}. Retrying in {backoff}s.")
                             await asyncio.sleep(backoff)
                             backoff *= 2
                             continue

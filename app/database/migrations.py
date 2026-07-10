@@ -4,13 +4,12 @@ import shutil
 import glob
 from datetime import datetime
 from typing import Tuple, Optional
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from alembic.config import Config
 from alembic import command
 from alembic.script import ScriptDirectory
 from alembic.runtime.migration import MigrationContext
 from app.config.settings import settings
-from app.database.models import Base
 from app.utils.logger import logger
 
 BACKUP_RETENTION = 10
@@ -99,78 +98,64 @@ def get_revisions() -> Tuple[Optional[str], Optional[str]]:
     head_rev = script.get_current_head()
     return current_rev, head_rev
 
-def verify_database_schema() -> bool:
-    """Execute a simple query against every registered table to verify schema integrity."""
-    db_url = settings.DATABASE_URL
-    sync_url = db_url.replace("sqlite+aiosqlite:///", "sqlite:///")
-    engine = create_engine(sync_url)
-    
-    logger.info("Verifying database schema integrity...")
-    try:
-        with engine.connect() as conn:
-            for table_name in Base.metadata.tables.keys():
-                # Execute simple select on each table to verify structure
-                conn.execute(text(f"SELECT 1 FROM {table_name} LIMIT 1"))
-                logger.info(f"Table verification check: {table_name} ........ OK")
-        return True
-    except Exception as e:
-        logger.error(f"Database schema verification failed: {e}")
-        return False
-
 def run_auto_migrations() -> None:
-    """Main orchestrator for managing dynamic schema migrations on startup."""
+    """Main orchestrator for managing dynamic schema migrations on startup with safety features."""
     db_path = get_db_file_path()
     if not db_path or not os.path.exists(db_path):
-        # Database does not exist yet; it will be created by create_all in init_db
         return
 
-    # 1. Fetch revisions
+    # 1. Backup SQLite
+    logger.info("Initializing database pre-migration backup...")
+    backup_path = create_db_backup()
+    if not backup_path:
+        logger.critical("Aborting startup: Failed to secure database backup.")
+        sys.exit(1)
+
+    # 2. Revisions Check
     try:
         current_rev, head_rev = get_revisions()
     except Exception as e:
-        logger.error(f"Failed to fetch database revisions: {e}")
-        return
+        logger.critical(f"Failed to fetch database revisions: {e}")
+        sys.exit(1)
 
     logger.info(f"Current Database Revision ....... {current_rev or 'None (Fresh)'}")
     logger.info(f"Latest Migration Revision ....... {head_rev}")
 
-    if current_rev == head_rev:
-        logger.info("Database schema is fully up-to-date. No migrations pending.")
-        # Verify schema integrity anyway
-        if not verify_database_schema():
-            logger.critical("Database schema verification failed. Aborting startup.")
+    # 3. Apply migrations if out of sync
+    if current_rev != head_rev:
+        logger.info("Alembic mismatch detected. Running upgrade...")
+        alembic_cfg = Config("alembic.ini")
+        try:
+            command.upgrade(alembic_cfg, "head")
+            logger.info("Database Migration ..... COMPLETE")
+        except Exception as e:
+            logger.critical(f"\n=======================================================\n"
+                            f"DATABASE MIGRATION FAILED!\n"
+                            f"Error: {e}\n"
+                            f"=======================================================")
+            # Self Healing: Rollback migration
+            logger.warning("Rolling back database to previous working state...")
+            if restore_backup(backup_path):
+                logger.info("Database restored successfully. Migration changes aborted.")
+            else:
+                logger.critical("DATABASE CORRUPTION: Rollback restoration failed!")
             sys.exit(1)
-        return
 
-    # 2. Create backup before migrations
-    backup_path = create_db_backup()
-    if not backup_path:
-        logger.critical("Aborting migration: Failed to secure database backup.")
-        sys.exit(1)
-
-    # 3. Apply migrations
-    logger.info("Applying pending database migrations...")
-    alembic_cfg = Config("alembic.ini")
+    # 4. Perform post-migration schema validation (verify schemas, indexes, constraints, relationships)
+    db_url = settings.DATABASE_URL
+    sync_url = db_url.replace("sqlite+aiosqlite:///", "sqlite:///")
+    engine = create_engine(sync_url)
     
-    try:
-        command.upgrade(alembic_cfg, "head")
-        logger.info("Database Migration ..... COMPLETE")
-        
-        # 4. Verify after migration
-        if not verify_database_schema():
-            raise RuntimeError("Database schema verification failed post-migration.")
-            
-    except Exception as e:
-        logger.critical(f"\n=======================================================\n"
-                        f"DATABASE MIGRATION FAILED!\n"
-                        f"Error: {e}\n"
-                        f"=======================================================")
-        
-        # 5. Restore from backup
-        logger.warning("Rolling back database to previous working state...")
-        if restore_backup(backup_path):
-            logger.info("Database restored successfully. Migration changes aborted.")
-        else:
-            logger.critical("DATABASE CORRUPTION: Rollback restoration failed!")
-            
+    from app.database.schema_audit import perform_schema_audit
+    logger.info("Performing post-migration schema validation...")
+    success, report = perform_schema_audit(engine)
+    if not success:
+        logger.critical("Database schema audit post-migration FAILED! Report:")
+        for line in report:
+            logger.critical(line)
+        # Rollback and exit
+        logger.warning("Rolling back database due to schema mismatch post-migration...")
+        restore_backup(backup_path)
         sys.exit(1)
+        
+    logger.info("Database validation successful: Schema, Indexes, Constraints, and Relationships are synchronized.")

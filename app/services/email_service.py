@@ -3,6 +3,8 @@ import json
 from datetime import datetime
 import smtplib
 import asyncio
+import socket
+import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
@@ -29,7 +31,6 @@ def get_encryption_key() -> bytes:
         except Exception as e:
             logger.error(f"Error reading encryption key: {e}")
             
-    # Fallback to generating a key
     try:
         os.makedirs(os.path.dirname(SECRET_KEY_PATH), exist_ok=True)
         key = Fernet.generate_key()
@@ -63,7 +64,6 @@ class EmailService:
         signature: str
     ) -> SMTPConfig:
         """Saves and validates SMTP credentials for a user."""
-        # Validate encryption type
         encryption_type = encryption_type.upper()
         if encryption_type not in ["SSL", "TLS", "NONE"]:
             raise ValueError("Tipe enkripsi harus SSL, TLS, atau NONE.")
@@ -114,17 +114,51 @@ class EmailService:
         """Sync test for SMTP credentials connectivity executed in a thread pool."""
         def _test():
             pwd = decrypt_password(config.password_encrypted)
-            if config.encryption_type == "SSL":
-                server = smtplib.SMTP_SSL(config.host, config.port, timeout=10)
-            else:
-                server = smtplib.SMTP(config.host, config.port, timeout=10)
-                if config.encryption_type == "TLS":
-                    server.starttls()
             
+            # 1. Establish socket and security connection
+            try:
+                if config.encryption_type == "SSL":
+                    try:
+                        server = smtplib.SMTP_SSL(config.host, config.port, timeout=10)
+                    except ssl.SSLError as e:
+                        raise ValueError(f"SSL Mismatch: Gagal menghubungkan menggunakan enkripsi SSL ke {config.host}:{config.port}. "
+                                         f"Kemungkinan port ini tidak mendukung SSL. Detail: {e}")
+                else:
+                    server = smtplib.SMTP(config.host, config.port, timeout=10)
+                    if config.encryption_type == "TLS":
+                        try:
+                            server.ehlo()
+                            if not server.has_ext("STARTTLS"):
+                                raise ValueError(f"STARTTLS Mismatch: Server SMTP {config.host}:{config.port} tidak mendukung STARTTLS. "
+                                                 f"Silakan gunakan tipe enkripsi SSL atau port yang sesuai.")
+                            server.starttls()
+                            server.ehlo()
+                        except smtplib.SMTPNotSupportedError as e:
+                            raise ValueError(f"STARTTLS Mismatch: Enkripsi STARTTLS tidak didukung oleh server. Detail: {e}")
+                        except ssl.SSLError as e:
+                            raise ValueError(f"STARTTLS Handshake Error: Gagal jabat tangan SSL/TLS saat STARTTLS. Detail: {e}")
+            except (socket.timeout, TimeoutError) as e:
+                raise ValueError(f"SMTP Connection Timeout: Waktu koneksi habis saat menghubungkan ke {config.host}:{config.port}. Detail: {e}")
+            except (ConnectionRefusedError, socket.gaierror) as e:
+                raise ValueError(f"SMTP Connection Refused / DNS Error: Gagal menghubungi server {config.host}:{config.port}. Detail: {e}")
+            except ValueError:
+                raise
+            except Exception as e:
+                raise ValueError(f"SMTP Connection Error: Gagal menghubungi server SMTP {config.host}:{config.port}. Detail: {e}")
+            
+            # 2. Authenticate
             try:
                 server.login(config.username, pwd)
+            except smtplib.SMTPAuthenticationError as e:
+                raise ValueError(f"SMTP Authentication Failure: Kredensial login salah untuk pengguna '{config.username}'. "
+                                 f"Pastikan email dan password aplikasi (app password) Anda benar. Detail: {e}")
+            except Exception as e:
+                raise ValueError(f"SMTP Authentication Error: Gagal melakukan proses autentikasi. Detail: {e}")
             finally:
-                server.quit()
+                try:
+                    server.quit()
+                except Exception:
+                    pass
 
         await asyncio.to_thread(_test)
 
@@ -158,7 +192,6 @@ class EmailService:
 
     async def send_email(self, session: AsyncSession, email_id: int) -> bool:
         """Dispatch queued email draft using SMTP configuration."""
-        # Load draft details
         stmt = select(EmailQueue).where(EmailQueue.id == email_id)
         res = await session.execute(stmt)
         email = res.scalar_one_or_none()
@@ -185,14 +218,12 @@ class EmailService:
             msg["To"] = email.recipient_email
             msg["Subject"] = email.subject
             
-            # Append signature if any
             full_body = email.body
             if config.signature:
                 full_body += f"\n\n--\n{config.signature}"
                 
             msg.attach(MIMEText(full_body, "plain", "utf-8"))
 
-            # Attachments processing
             if email.attachments:
                 try:
                     file_paths = json.loads(email.attachments)
@@ -205,19 +236,48 @@ class EmailService:
                 except Exception as e:
                     logger.error(f"Error processing attachments for email {email_id}: {e}")
 
-            # Send connection
-            if config.encryption_type == "SSL":
-                server = smtplib.SMTP_SSL(config.host, config.port, timeout=20)
-            else:
-                server = smtplib.SMTP(config.host, config.port, timeout=20)
-                if config.encryption_type == "TLS":
-                    server.starttls()
+            # 1. Establish connection
+            try:
+                if config.encryption_type == "SSL":
+                    try:
+                        server = smtplib.SMTP_SSL(config.host, config.port, timeout=20)
+                    except ssl.SSLError as e:
+                        raise ValueError(f"SSL Mismatch: Gagal menghubungkan menggunakan enkripsi SSL ke {config.host}:{config.port}. Detail: {e}")
+                else:
+                    server = smtplib.SMTP(config.host, config.port, timeout=20)
+                    if config.encryption_type == "TLS":
+                        try:
+                            server.ehlo()
+                            if not server.has_ext("STARTTLS"):
+                                raise ValueError(f"STARTTLS Mismatch: Server SMTP {config.host}:{config.port} tidak mendukung STARTTLS.")
+                            server.starttls()
+                            server.ehlo()
+                        except smtplib.SMTPNotSupportedError as e:
+                            raise ValueError(f"STARTTLS Mismatch: Enkripsi STARTTLS tidak didukung oleh server. Detail: {e}")
+                        except ssl.SSLError as e:
+                            raise ValueError(f"STARTTLS Handshake Error: Gagal jabat tangan SSL/TLS saat STARTTLS. Detail: {e}")
+            except (socket.timeout, TimeoutError) as e:
+                raise ValueError(f"SMTP Connection Timeout: Waktu koneksi habis saat menghubungkan ke {config.host}:{config.port}. Detail: {e}")
+            except (ConnectionRefusedError, socket.gaierror) as e:
+                raise ValueError(f"SMTP Connection Refused / DNS Error: Gagal menghubungi server {config.host}:{config.port}. Detail: {e}")
+            except ValueError:
+                raise
+            except Exception as e:
+                raise ValueError(f"SMTP Connection Error: Gagal menghubungi server SMTP {config.host}:{config.port}. Detail: {e}")
             
+            # 2. Login & Send
             try:
                 server.login(config.username, pwd)
                 server.send_message(msg)
+            except smtplib.SMTPAuthenticationError as e:
+                raise ValueError(f"SMTP Authentication Failure: Kredensial login salah untuk '{config.username}'. Detail: {e}")
+            except Exception as e:
+                raise ValueError(f"SMTP Send Error: Gagal saat otentikasi/pengiriman pesan. Detail: {e}")
             finally:
-                server.quit()
+                try:
+                    server.quit()
+                except Exception:
+                    pass
 
         try:
             await asyncio.to_thread(_send)

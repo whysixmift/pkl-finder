@@ -161,6 +161,17 @@ class JobService:
 
                 for job in newly_inserted_jobs[:settings.MAX_JOBS_PER_RUN]:
                     try:
+                        # Cache Check: Check if match score already exists in DB
+                        cache_stmt = select(AIScore).where((AIScore.user_id == uid) & (AIScore.job_id == job.id))
+                        cache_res = await session.execute(cache_stmt)
+                        existing_score = cache_res.scalar_one_or_none()
+                        
+                        if existing_score:
+                            logger.info(f"Using cached AI evaluation for User {uid} on Job {job.id}")
+                            if existing_score.recommended and existing_score.score >= settings.SCORE_THRESHOLD:
+                                final_user_recommendations.append((uid, job))
+                            continue
+
                         eval_result = await evaluator.evaluate_job(
                             title=job.title,
                             company=job.company_name,
