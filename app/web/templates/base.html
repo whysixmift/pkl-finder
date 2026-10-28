@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}PKL Finder SaaS{% endblock %} - Autonomous AI Internship Hunter</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#eef2ff',
+                            100: '#e0e7ff',
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            700: '#4338ca',
+                            900: '#312e81',
+                        },
+                        dark: {
+                            bg: '#0b0f19',
+                            card: '#111827',
+                            border: '#1f2937',
+                            muted: '#374151'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #0b0f19;
+            color: #f3f4f6;
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        .glow-brand {
+            box-shadow: 0 0 25px -5px rgba(99, 102, 241, 0.25);
+        }
+        .glass-panel {
+            background: rgba(17, 24, 39, 0.85);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col md:flex-row">
+    <!-- Sidebar Navigation -->
+    <aside class="w-full md:w-64 glass-panel border-r border-gray-800 flex flex-col shrink-0 z-30">
+        <div class="p-6 border-b border-gray-800/80 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-400 flex items-center justify-center text-white shadow-lg shadow-indigo-500/30">
+                    <i class="fa-solid fa-radar text-lg"></i>
+                </div>
+                <div>
+                    <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-1.5">
+                        PKL Finder
+                        <span class="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">SaaS</span>
+                    </h1>
+                    <p class="text-xs text-gray-400">Autonomous AI Hunter</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Navigation Links -->
+        <nav class="flex-1 p-4 space-y-1.5 overflow-y-auto">
+            <div class="px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Navigasi Utama</div>
+            
+            <a href="/admin/dashboard" class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors {% if active_page == 'dashboard' %}bg-brand-600 text-white shadow-md shadow-brand-600/30{% else %}text-gray-300 hover:bg-gray-800/60 hover:text-white{% endif %}">
+                <i class="fa-solid fa-chart-line w-5 text-center mr-3"></i>
+                Dashboard Overview
+            </a>
+
+            <a href="/admin/companies" class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors {% if active_page == 'companies' %}bg-brand-600 text-white shadow-md shadow-brand-600/30{% else %}text-gray-300 hover:bg-gray-800/60 hover:text-white{% endif %}">
+                <i class="fa-solid fa-building w-5 text-center mr-3"></i>
+                Katalog PT & Lowongan
+            </a>
+
+            <a href="/admin/users" class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors {% if active_page == 'users' %}bg-brand-600 text-white shadow-md shadow-brand-600/30{% else %}text-gray-300 hover:bg-gray-800/60 hover:text-white{% endif %}">
+                <i class="fa-solid fa-user-shield w-5 text-center mr-3"></i>
+                Whitelist Pengguna Bot
+            </a>
+
+            <a href="/admin/emails" class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors {% if active_page == 'emails' %}bg-brand-600 text-white shadow-md shadow-brand-600/30{% else %}text-gray-300 hover:bg-gray-800/60 hover:text-white{% endif %}">
+                <i class="fa-solid fa-envelope-open-text w-5 text-center mr-3"></i>
+                Antrean Cold Email
+            </a>
+
+            <a href="/admin/agents" class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors {% if active_page == 'agents' %}bg-brand-600 text-white shadow-md shadow-brand-600/30{% else %}text-gray-300 hover:bg-gray-800/60 hover:text-white{% endif %}">
+                <i class="fa-solid fa-microchip w-5 text-center mr-3"></i>
+                Sistem Multi-Agent
+            </a>
+
+            <a href="/admin/settings" class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors {% if active_page == 'settings' %}bg-brand-600 text-white shadow-md shadow-brand-600/30{% else %}text-gray-300 hover:bg-gray-800/60 hover:text-white{% endif %}">
+                <i class="fa-solid fa-sliders w-5 text-center mr-3 text-amber-400"></i>
+                Pengaturan (.env)
+            </a>
+
+            <div class="px-3 pt-4 pb-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Integrasi & SSO</div>
+
+            <a href="/auth/google" target="_blank" class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium text-gray-300 hover:bg-gray-800/60 hover:text-white transition-colors">
+                <i class="fa-brands fa-google w-5 text-center mr-3 text-red-400"></i>
+                Test Google SSO Login
+            </a>
+
+            <a href="/" target="_blank" class="flex items-center px-3.5 py-2.5 rounded-lg text-sm font-medium text-gray-300 hover:bg-gray-800/60 hover:text-white transition-colors">
+                <i class="fa-solid fa-globe w-5 text-center mr-3 text-emerald-400"></i>
+                Public Landing Page
+            </a>
+        </nav>
+
+        <!-- System & Ports Info Card -->
+        <div class="p-4 border-t border-gray-800/80 bg-gray-950/40">
+            <div class="text-[11px] font-mono text-gray-400 space-y-1 mb-3">
+                <div class="flex justify-between items-center">
+                    <span>Telegram Bot:</span>
+                    <span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-[10px] font-bold">PORT 20128</span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span>Web Platform:</span>
+                    <span class="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 text-[10px] font-bold">PORT 20129</span>
+                </div>
+            </div>
+
+            <div class="flex items-center justify-between pt-2 border-t border-gray-800/60">
+                <div class="flex items-center space-x-2">
+                    <div class="w-7 h-7 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs font-bold">
+                        A
+                    </div>
+                    <div>
+                        <div class="text-xs font-semibold text-white">Superadmin</div>
+                        <div class="text-[10px] text-gray-400">Full Access</div>
+                    </div>
+                </div>
+                <a href="/admin/logout" class="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors" title="Logout">
+                    <i class="fa-solid fa-arrow-right-from-bracket text-sm"></i>
+                </a>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="flex-1 flex flex-col min-w-0 overflow-y-auto">
+        <!-- Topbar -->
+        <header class="h-16 border-b border-gray-800 glass-panel px-6 flex items-center justify-between sticky top-0 z-20">
+            <div class="flex items-center space-x-4">
+                <h2 class="text-base font-semibold text-white">{% block page_title %}Dashboard{% endblock %}</h2>
+                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    <span class="w-1.5 h-1.5 mr-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    Live Production Dual-Port
+                </span>
+            </div>
+
+            <div class="flex items-center space-x-3">
+                <form action="/admin/trigger-scrape" method="POST" class="inline">
+                    <button type="submit" class="px-3 py-1.5 bg-indigo-600/80 hover:bg-indigo-600 text-white rounded-lg text-xs font-semibold shadow transition-colors flex items-center gap-1.5">
+                        <i class="fa-solid fa-arrows-rotate"></i>
+                        Scrape Sekarang
+                    </button>
+                </form>
+                <form action="/admin/trigger-crawl" method="POST" class="inline">
+                    <button type="submit" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 border border-gray-700">
+                        <i class="fa-solid fa-spider"></i>
+                        Crawl Email PT
+                    </button>
+                </form>
+            </div>
+        </header>
+
+        <!-- Flash messages / Notifications -->
+        {% if message %}
+        <div class="mx-6 mt-4 p-4 rounded-xl border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 text-sm flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <i class="fa-solid fa-circle-info text-indigo-400"></i>
+                <span>{{ message }}</span>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if error %}
+        <div class="mx-6 mt-4 p-4 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <i class="fa-solid fa-triangle-exclamation text-red-400"></i>
+                <span>{{ error }}</span>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Page Body -->
+        <div class="p-6 flex-1">
+            {% block content %}{% endblock %}
+        </div>
+    </main>
+</body>
+</html>

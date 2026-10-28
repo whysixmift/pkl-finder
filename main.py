@@ -1,4 +1,6 @@
 import sys
+import asyncio
+import threading
 from telegram.ext import ApplicationBuilder
 from app.config.settings import settings
 from app.database.db import init_db
@@ -6,6 +8,8 @@ from app.bot.handlers import setup_bot
 from app.scheduler.jobs import setup_scheduler, scheduler
 from app.ai.evaluator import evaluator
 from app.services.job_service import JobService
+from app.web.server import run_web_server
+from app.bot.server import run_bot_http_server
 from app.utils.logger import logger
 
 async def run_startup_diagnostics(application) -> None:
@@ -94,6 +98,8 @@ async def run_startup_diagnostics(application) -> None:
     grid += "[+] Scheduler Engine    : OK\n"
     grid += f"[+] Company Discovery   : {discovery_status}\n"
     grid += f"[+] Configured Model    : {settings.PRIMARY_MODEL}\n"
+    grid += f"[+] Bot Service Port    : {settings.BOT_PORT}\n"
+    grid += f"[+] Web Platform Port   : {settings.WEB_PORT}\n"
     grid += "[-] Scraper Statuses    :\n"
     grid += f"{scrapers_summary}\n"
     grid += "=" * 55
@@ -103,10 +109,20 @@ async def post_init(application) -> None:
     """Perform async startup operations inside the bot's event loop."""
     await run_startup_diagnostics(application)
     
+    # Run Bot HTTP service on Port 20128
+    bot_user = "Unknown"
+    try:
+        info = await application.bot.get_me()
+        bot_user = f"@{info.username}"
+    except Exception:
+        pass
+    
+    asyncio.create_task(run_bot_http_server(bot_username=bot_user, host=settings.HOST, port=settings.BOT_PORT))
+
     logger.info("Starting background scheduler...")
     setup_scheduler()
     
-    logger.info("Application post-initialization completed successfully.")
+    logger.info(f"Bot branch initialization completed on port {settings.BOT_PORT}.")
 
 async def post_shutdown(application) -> None:
     """Perform cleanup on shutdown."""
@@ -115,17 +131,23 @@ async def post_shutdown(application) -> None:
         scheduler.shutdown(wait=False)
     logger.info("Application shutdown completed.")
 
-def main() -> None:
-    """Main application entrypoint."""
-    logger.info("Starting PKL Finder Telegram Bot...")
+def run_bot_branch() -> None:
+    """Run Telegram Bot polling application (Port 20128)."""
+    logger.info(f"Starting PKL Finder Telegram Bot Branch (Port {settings.BOT_PORT})...")
     
-    # Validate critical configuration
     if not settings.TELEGRAM_BOT_TOKEN or settings.TELEGRAM_BOT_TOKEN.startswith("your_"):
-        logger.critical("TELEGRAM_BOT_TOKEN is not configured. Exiting.")
-        sys.exit(1)
+        logger.warning(
+            f"TELEGRAM_BOT_TOKEN is not configured. Telegram polling is paused. "
+            f"Please configure your token via Web Admin Dashboard at http://{settings.HOST}:{settings.WEB_PORT}/admin/settings. "
+            f"Starting Bot HTTP Health Service on Port {settings.BOT_PORT}..."
+        )
+        from app.bot.server import create_bot_http_app
+        import uvicorn
+        bot_app = create_bot_http_app("Awaiting_Bot_Token")
+        uvicorn.run(bot_app, host=settings.HOST, port=settings.BOT_PORT, log_level="warning")
+        return
 
     try:
-        # Build python-telegram-bot Application
         application = (
             ApplicationBuilder()
             .token(settings.TELEGRAM_BOT_TOKEN)
@@ -133,16 +155,57 @@ def main() -> None:
             .post_shutdown(post_shutdown)
             .build()
         )
-        
-        # Setup bot handlers and commands
         setup_bot(application)
-        
-        # Run Bot in polling mode (blocking)
-        logger.info("Starting polling...")
+        logger.info(f"Starting Telegram Bot polling (Port {settings.BOT_PORT})...")
         application.run_polling()
-        
     except Exception as e:
         logger.critical(f"Unhandled exception during bot runtime: {e}", exc_info=True)
+        from app.bot.server import create_bot_http_app
+        import uvicorn
+        bot_app = create_bot_http_app("Bot_Error_Fallback")
+        uvicorn.run(bot_app, host=settings.HOST, port=settings.BOT_PORT, log_level="warning")
+
+def run_web_branch() -> None:
+    """Run SaaS Web Application & Admin Dashboard (Port 20129)."""
+    logger.info(f"Starting PKL Finder Web Platform Branch (Port {settings.WEB_PORT})...")
+    try:
+        asyncio.run(run_web_server(host=settings.HOST, port=settings.WEB_PORT))
+    except Exception as e:
+        logger.critical(f"Unhandled exception during web runtime: {e}", exc_info=True)
+        sys.exit(1)
+
+def main() -> None:
+    """Main application entrypoint.
+    Modes:
+      all (default) : Runs Bot (Port 20128) and Web (Port 20129) concurrently.
+      bot           : Runs only the Telegram Bot branch (Port 20128).
+      web           : Runs only the SaaS Web branch (Port 20129).
+    """
+    mode = sys.argv[1].lower() if len(sys.argv) > 1 else "all"
+
+    if mode == "web":
+        run_web_branch()
+    elif mode == "bot":
+        run_bot_branch()
+    elif mode == "all":
+        logger.info("=" * 60)
+        logger.info("   BOOTING PKL FINDER SAAS - DUAL-PORT ARCHITECTURE")
+        logger.info(f"   [1] Bot Service Branch : PORT {settings.BOT_PORT}")
+        logger.info(f"   [2] Web SaaS Branch    : PORT {settings.WEB_PORT}")
+        logger.info("=" * 60)
+        
+        # Start Web Platform in background thread
+        web_thread = threading.Thread(
+            target=run_web_branch,
+            name=f"WebPlatform-Port{settings.WEB_PORT}",
+            daemon=True
+        )
+        web_thread.start()
+
+        # Run Bot in main thread
+        run_bot_branch()
+    else:
+        print(f"Unknown mode: '{mode}'. Usage: python main.py [all|bot|web]")
         sys.exit(1)
 
 if __name__ == "__main__":

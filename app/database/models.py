@@ -138,6 +138,7 @@ class CVProfile(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, default=0, server_default="0", unique=True, index=True)
     filename: Mapped[str] = mapped_column(String(255))
+    file_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     cv_text: Mapped[str] = mapped_column(Text)
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
@@ -206,3 +207,38 @@ class EmailQueue(Base):
     # Relationships
     company: Mapped[Company] = relationship("Company", back_populates="emails")
     job: Mapped[Optional[Job]] = relationship("Job", back_populates="emails")
+
+class UserWhitelist(Base):
+    """Whitelisted users permitted to interact with the SaaS bot and web (Multi-Tenant)."""
+    __tablename__ = "user_whitelist"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, unique=True, index=True)
+    username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, unique=True, index=True)
+    notes: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
+class UserGoogleAuth(Base):
+    """Google OAuth credentials for sending emails via Gmail API (User-Specific)."""
+    __tablename__ = "user_google_auth"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(255))
+    access_token_encrypted: Mapped[str] = mapped_column(Text)
+    refresh_token_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    token_expiry: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    scopes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )

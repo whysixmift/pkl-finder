@@ -12,7 +12,7 @@ from typing import List, Optional
 from cryptography.fernet import Fernet
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.database.models import SMTPConfig, EmailQueue
+from app.database.models import SMTPConfig, EmailQueue, UserGoogleAuth, CVProfile
 from app.utils.logger import logger
 
 # Initialize encryption keys
@@ -174,7 +174,15 @@ class EmailService:
         job_id: Optional[int] = None,
         attachments: Optional[List[str]] = None
     ) -> EmailQueue:
-        """Saves a generated email draft to the queue for a user."""
+        """Saves a generated email draft to the queue for a user, automatically attaching CV if available."""
+        if attachments is None:
+            # Auto-attach active CV document if present
+            stmt_cv = select(CVProfile).where(CVProfile.user_id == user_id)
+            res_cv = await session.execute(stmt_cv)
+            cv_prof = res_cv.scalar_one_or_none()
+            if cv_prof and cv_prof.file_path and os.path.exists(cv_prof.file_path):
+                attachments = [cv_prof.file_path]
+
         draft = EmailQueue(
             user_id=user_id,
             company_id=company_id,
@@ -191,7 +199,7 @@ class EmailService:
         return draft
 
     async def send_email(self, session: AsyncSession, email_id: int) -> bool:
-        """Dispatch queued email draft using SMTP configuration."""
+        """Dispatch queued email draft using Google Gmail OAuth API or SMTP fallback."""
         stmt = select(EmailQueue).where(EmailQueue.id == email_id)
         res = await session.execute(stmt)
         email = res.scalar_one_or_none()
@@ -199,12 +207,33 @@ class EmailService:
         if not email or email.status in ["sent", "sending"]:
             return False
 
+        # 1. Check if user has active Google SSO OAuth (Gmail API)
+        from app.services.google_auth_service import google_auth_service
+        google_auth = await google_auth_service.get_active_auth(session, email.user_id)
+        if google_auth:
+            email.status = "sending"
+            await session.commit()
+            success, msg_or_id = await google_auth_service.send_gmail(session, email)
+            if success:
+                email.status = "sent"
+                email.sent_at = datetime.utcnow()
+                email.error_message = None
+                await session.commit()
+                logger.info(f"Email ID {email_id} successfully dispatched via Google Gmail API ({msg_or_id})")
+                return True
+            else:
+                email.status = "failed"
+                email.error_message = msg_or_id
+                await session.commit()
+                raise ValueError(f"Google Gmail API dispatch failed: {msg_or_id}")
+
+        # 2. Check for configured SMTP credentials
         config = await self.get_active_config(session, email.user_id)
         if not config:
             email.status = "failed"
-            email.error_message = f"SMTP Credentials not configured for user {email.user_id}."
+            email.error_message = f"Neither Google Gmail OAuth nor SMTP Credentials configured for user {email.user_id}."
             await session.commit()
-            raise ValueError(f"SMTP Config is missing for user {email.user_id}. Configure SMTP via Telegram.")
+            raise ValueError(f"No active email sender configuration for user {email.user_id}. Connect Google account or configure SMTP.")
 
         email.status = "sending"
         await session.commit()

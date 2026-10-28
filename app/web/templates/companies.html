@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+
+{% block title %}Katalog PT & Lowongan - PKL Finder SaaS{% endblock %}
+{% block page_title %}Katalog PT & Lowongan Magang{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header Controls & Search -->
+    <div class="glass-panel p-6 rounded-2xl border border-gray-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+            <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-city text-indigo-400"></i>
+                Database Perusahaan & Lowongan Magang
+            </h3>
+            <p class="text-xs text-gray-400 mt-1">Daftar semua PT yang telah ditemukan, dikumpulkan, dan dicrawl dari multi-source scraper.</p>
+        </div>
+
+        <!-- Search Bar -->
+        <form action="/admin/companies" method="GET" class="flex items-center gap-2 max-w-md w-full">
+            <div class="relative flex-1">
+                <input
+                    type="text"
+                    name="q"
+                    value="{{ search_query }}"
+                    placeholder="Cari PT, industri, atau posisi..."
+                    class="w-full px-4 py-2 pl-9 bg-gray-950/80 border border-gray-700 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500 text-xs">
+                    <i class="fa-solid fa-magnifying-glass"></i>
+                </div>
+            </div>
+            <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition">
+                Cari
+            </button>
+            {% if search_query %}
+            <a href="/admin/companies" class="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded-xl text-xs transition" title="Reset Search">
+                <i class="fa-solid fa-xmark"></i>
+            </a>
+            {% endif %}
+        </form>
+    </div>
+
+    <!-- Section 1: Daftar PT (Perusahaan) -->
+    <div class="glass-panel rounded-2xl border border-gray-800 overflow-hidden">
+        <div class="p-5 border-b border-gray-800 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <h4 class="text-sm font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-building text-indigo-400"></i>
+                    Daftar PT / Perusahaan Terdaftar
+                </h4>
+                <span class="px-2 py-0.5 rounded-full text-xs font-mono bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                    {{ companies|length }} PT Ditemukan
+                </span>
+            </div>
+        </div>
+
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs">
+                <thead class="bg-gray-950/70 text-gray-400 border-b border-gray-800 font-mono text-[11px] uppercase">
+                    <tr>
+                        <th class="py-3 px-4">Nama PT / Company</th>
+                        <th class="py-3 px-4">Website & Portal Karir</th>
+                        <th class="py-3 px-4">Email Rekrutmen</th>
+                        <th class="py-3 px-4">Industri</th>
+                        <th class="py-3 px-4">Status Discovery</th>
+                        <th class="py-3 px-4">Terdaftar</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-800/60">
+                    {% for comp in companies %}
+                    <tr class="hover:bg-gray-800/30 transition">
+                        <td class="py-3 px-4">
+                            <span class="font-bold text-white text-sm block">{{ comp.name }}</span>
+                            <span class="text-[10px] text-gray-500 font-mono">ID: #{{ comp.id }}</span>
+                        </td>
+                        <td class="py-3 px-4 space-y-1">
+                            {% if comp.website %}
+                            <div class="flex items-center gap-1.5">
+                                <i class="fa-solid fa-link text-[10px] text-gray-500"></i>
+                                <a href="{{ comp.website }}" target="_blank" class="text-indigo-400 hover:underline truncate max-w-[200px] block">
+                                    {{ comp.website }}
+                                </a>
+                            </div>
+                            {% endif %}
+                            {% if comp.career_url %}
+                            <div class="flex items-center gap-1.5">
+                                <i class="fa-solid fa-briefcase text-[10px] text-gray-500"></i>
+                                <a href="{{ comp.career_url }}" target="_blank" class="text-purple-400 hover:underline truncate max-w-[200px] block">
+                                    Karir Portal
+                                </a>
+                            </div>
+                            {% endif %}
+                            {% if not comp.website and not comp.career_url %}
+                            <span class="text-gray-500">-</span>
+                            {% endif %}
+                        </td>
+                        <td class="py-3 px-4">
+                            {% if comp.recruitment_email %}
+                            <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 font-mono text-[11px] border border-emerald-500/20">
+                                <i class="fa-regular fa-envelope"></i>
+                                <span>{{ comp.recruitment_email }}</span>
+                            </div>
+                            {% else %}
+                            <span class="text-gray-500 italic text-[11px]">Belum terdeteksi</span>
+                            {% endif %}
+                        </td>
+                        <td class="py-3 px-4 text-gray-300">
+                            {{ comp.industry or 'Teknologi Informasi' }}
+                        </td>
+                        <td class="py-3 px-4">
+                            {% if comp.is_discovered %}
+                            <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                                Discovered
+                            </span>
+                            {% else %}
+                            <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-700/40 text-gray-400">
+                                Scraped
+                            </span>
+                            {% endif %}
+                        </td>
+                        <td class="py-3 px-4 text-gray-400 font-mono text-[11px]">
+                            {{ comp.created_at.strftime('%Y-%m-%d') if comp.created_at else '-' }}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="py-8 text-center text-gray-500">
+                            Tidak ada PT yang ditemukan. Coba jalankan "Scrape Sekarang".
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Section 2: Scraped Jobs -->
+    <div class="glass-panel rounded-2xl border border-gray-800 overflow-hidden">
+        <div class="p-5 border-b border-gray-800 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <h4 class="text-sm font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-list-check text-blue-400"></i>
+                    Semua Lowongan Magang yang Tersimpan
+                </h4>
+                <span class="px-2 py-0.5 rounded-full text-xs font-mono bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                    {{ jobs|length }} Lowongan
+                </span>
+            </div>
+        </div>
+
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs">
+                <thead class="bg-gray-950/70 text-gray-400 border-b border-gray-800 font-mono text-[11px] uppercase">
+                    <tr>
+                        <th class="py-3 px-4">Posisi & Perusahaan</th>
+                        <th class="py-3 px-4">Lokasi</th>
+                        <th class="py-3 px-4">Sumber</th>
+                        <th class="py-3 px-4">Tipe & Gaji</th>
+                        <th class="py-3 px-4">Tanggal Diperoleh</th>
+                        <th class="py-3 px-4">Aksi</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-800/60">
+                    {% for job in jobs %}
+                    <tr class="hover:bg-gray-800/30 transition">
+                        <td class="py-3 px-4">
+                            <span class="font-bold text-white text-sm block">{{ job.title }}</span>
+                            <span class="text-gray-400 font-medium">{{ job.company_name }}</span>
+                        </td>
+                        <td class="py-3 px-4 text-gray-300 font-medium">
+                            <i class="fa-solid fa-location-dot text-[10px] text-gray-500 mr-1"></i>
+                            {{ job.location }}
+                        </td>
+                        <td class="py-3 px-4">
+                            <span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold bg-gray-800 text-gray-300 border border-gray-700">
+                                {{ job.source }}
+                            </span>
+                        </td>
+                        <td class="py-3 px-4 space-y-0.5">
+                            <div class="text-gray-300">{{ job.employment_type or 'Internship' }} ({{ job.work_mode or 'On-site' }})</div>
+                            <div class="text-[11px] text-indigo-400 font-mono">{{ job.salary or 'Unspecified' }}</div>
+                        </td>
+                        <td class="py-3 px-4 text-gray-400 font-mono text-[11px]">
+                            {{ job.created_at.strftime('%Y-%m-%d') if job.created_at else '-' }}
+                        </td>
+                        <td class="py-3 px-4">
+                            <a href="{{ job.url }}" target="_blank" class="px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/30 text-xs font-semibold inline-flex items-center gap-1 transition">
+                                <span>Buka</span>
+                                <i class="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
+                            </a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="py-8 text-center text-gray-500">
+                            Tidak ada lowongan magang tersimpan saat ini.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

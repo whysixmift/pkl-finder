@@ -1,0 +1,343 @@
+{% extends "base.html" %}
+
+{% block title %}Pengaturan Environment (.env){% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h2 class="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+                <i class="fa-solid fa-sliders text-amber-400"></i>
+                Pengaturan Environment (.env)
+            </h2>
+            <p class="text-sm text-gray-400 mt-1">
+                Kelola API Keys, Token Telegram, Port VPS, dan kredensial sistem langsung dari dashboard tanpa edit file manual di VPS.
+            </p>
+        </div>
+        <div class="flex items-center gap-2">
+            <span class="text-xs font-mono px-2.5 py-1 rounded bg-gray-800 text-gray-300 border border-gray-700">
+                <i class="fa-solid fa-file-code text-indigo-400 mr-1.5"></i>{{ env_path }}
+            </span>
+            <form action="/admin/settings/reset" method="POST" onsubmit="return confirm('Apakah Anda yakin ingin me-reset file .env ke template awal (.env.example)? Perubahan custom Anda akan ditimpa.')">
+                <button type="submit" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-800 hover:bg-red-500/20 text-gray-400 hover:text-red-400 border border-gray-700 hover:border-red-500/30 transition-all flex items-center gap-1.5">
+                    <i class="fa-solid fa-rotate-left"></i>
+                    Reset ke Template
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Alert Banners -->
+    <div class="p-4 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-start gap-3 text-indigo-300 text-xs">
+        <i class="fa-solid fa-circle-info text-base text-indigo-400 shrink-0 mt-0.5"></i>
+        <div class="space-y-1">
+            <p class="font-medium text-white">Live In-Memory Reload:</p>
+            <p class="text-gray-300">Setiap perubahan yang Anda simpan akan <strong>langsung dimuat ke memory aplikasi (live reload)</strong>. Namun khusus untuk perubahan <strong>PORT (20128/20129)</strong> atau <strong>TELEGRAM_BOT_TOKEN</strong>, Anda disarankan me-restart container/service VPS agar listener terikat ke port/token yang baru.</p>
+        </div>
+    </div>
+
+    <!-- Tab Selector -->
+    <div class="flex border-b border-gray-800 space-x-2">
+        <button id="tabBtnForm" onclick="switchTab('form')" class="px-4 py-2.5 text-sm font-semibold border-b-2 border-brand-500 text-brand-400 flex items-center gap-2 transition-all">
+            <i class="fa-solid fa-table-cells-large"></i>
+            Visual Form Editor
+        </button>
+        <button id="tabBtnRaw" onclick="switchTab('raw')" class="px-4 py-2.5 text-sm font-semibold border-b-2 border-transparent text-gray-400 hover:text-gray-200 flex items-center gap-2 transition-all">
+            <i class="fa-solid fa-code"></i>
+            Raw .env Editor
+        </button>
+    </div>
+
+    <!-- VIEW 1: STRUCTURED FORM EDITOR -->
+    <div id="viewForm" class="space-y-6">
+        <form action="/admin/settings/form" method="POST" class="space-y-6">
+            
+            <!-- SECTION 1: TELEGRAM BOT -->
+            <div class="glass-panel p-6 rounded-2xl border border-gray-800/80">
+                <div class="flex items-center gap-3 pb-4 mb-4 border-b border-gray-800">
+                    <div class="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center font-bold">
+                        <i class="fa-brands fa-telegram"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-semibold text-white">1. Telegram Bot Settings</h3>
+                        <p class="text-xs text-gray-400">Token bot dari @BotFather dan ID Admin Telegram Anda.</p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="space-y-1.5">
+                        <label class="text-xs font-medium text-gray-300 flex items-center justify-between">
+                            <span>TELEGRAM_BOT_TOKEN <span class="text-red-400">*</span></span>
+                            <span class="text-[10px] text-gray-500 font-mono">wajib</span>
+                        </label>
+                        <div class="relative">
+                            <input type="password" id="field_bot_token" name="telegram_bot_token" value="{{ env_dict.TELEGRAM_BOT_TOKEN }}" required class="w-full px-3.5 py-2.5 pr-10 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors">
+                            <button type="button" onclick="toggleVisibility('field_bot_token', this)" class="absolute right-3 top-2.5 text-gray-400 hover:text-white">
+                                <i class="fa-solid fa-eye text-xs"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <label class="text-xs font-medium text-gray-300 flex items-center justify-between">
+                            <span>TELEGRAM_ADMIN_ID <span class="text-red-400">*</span></span>
+                            <span class="text-[10px] text-gray-500 font-mono">numerik</span>
+                        </label>
+                        <input type="number" name="telegram_admin_id" value="{{ env_dict.TELEGRAM_ADMIN_ID }}" required class="w-full px-3.5 py-2.5 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors" placeholder="e.g. 123456789">
+                    </div>
+                </div>
+            </div>
+
+            <!-- SECTION 2: OPENROUTER AI ENGINE -->
+            <div class="glass-panel p-6 rounded-2xl border border-gray-800/80">
+                <div class="flex items-center gap-3 pb-4 mb-4 border-b border-gray-800">
+                    <div class="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-bold">
+                        <i class="fa-solid fa-brain"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-semibold text-white">2. OpenRouter AI Engine</h3>
+                        <p class="text-xs text-gray-400">Model LLM untuk evaluasi semantik CV & copywriting cold email.</p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="space-y-1.5 md:col-span-2">
+                        <label class="text-xs font-medium text-gray-300 flex items-center justify-between">
+                            <span>OPENROUTER_API_KEY <span class="text-red-400">*</span></span>
+                            <span class="text-[10px] text-gray-500 font-mono">sk-or-v1-...</span>
+                        </label>
+                        <div class="relative">
+                            <input type="password" id="field_openrouter_key" name="openrouter_api_key" value="{{ env_dict.OPENROUTER_API_KEY }}" required class="w-full px-3.5 py-2.5 pr-10 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors">
+                            <button type="button" onclick="toggleVisibility('field_openrouter_key', this)" class="absolute right-3 top-2.5 text-gray-400 hover:text-white">
+                                <i class="fa-solid fa-eye text-xs"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <label class="text-xs font-medium text-gray-300">PRIMARY_MODEL (Model Utama)</label>
+                        <input type="text" name="primary_model" value="{{ env_dict.PRIMARY_MODEL }}" class="w-full px-3.5 py-2.5 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors">
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <label class="text-xs font-medium text-gray-300">FALLBACK_MODELS (Cadangan pisahkan koma)</label>
+                        <input type="text" name="fallback_models" value="{{ env_dict.FALLBACK_MODELS }}" class="w-full px-3.5 py-2.5 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors">
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <label class="text-xs font-medium text-gray-300">OPENROUTER_API_URL</label>
+                        <input type="text" name="openrouter_api_url" value="{{ env_dict.OPENROUTER_API_URL }}" class="w-full px-3.5 py-2.5 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors">
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <label class="text-xs font-medium text-gray-300">SCORE_THRESHOLD (Skor Minimum 0-100)</label>
+                        <input type="number" name="score_threshold" value="{{ env_dict.SCORE_THRESHOLD }}" min="0" max="100" class="w-full px-3.5 py-2.5 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors">
+                    </div>
+                </div>
+            </div>
+
+            <!-- SECTION 3: GOOGLE SSO & GMAIL API -->
+            <div class="glass-panel p-6 rounded-2xl border border-gray-800/80">
+                <div class="flex items-center gap-3 pb-4 mb-4 border-b border-gray-800">
+                    <div class="w-8 h-8 rounded-lg bg-red-500/10 text-red-400 flex items-center justify-center font-bold">
+                        <i class="fa-brands fa-google"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-semibold text-white">3. Google SSO & Gmail API OAuth 2.0</h3>
+                        <p class="text-xs text-gray-400">Untuk otorisasi pengiriman cold email langsung via akun Gmail user.</p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="space-y-1.5">
+                        <label class="text-xs font-medium text-gray-300">GOOGLE_CLIENT_ID</label>
+                        <input type="text" name="google_client_id" value="{{ env_dict.GOOGLE_CLIENT_ID }}" class="w-full px-3.5 py-2.5 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors" placeholder="xxxx.apps.googleusercontent.com">
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <label class="text-xs font-medium text-gray-300">GOOGLE_CLIENT_SECRET</label>
+                        <div class="relative">
+                            <input type="password" id="field_google_secret" name="google_client_secret" value="{{ env_dict.GOOGLE_CLIENT_SECRET }}" class="w-full px-3.5 py-2.5 pr-10 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors">
+                            <button type="button" onclick="toggleVisibility('field_google_secret', this)" class="absolute right-3 top-2.5 text-gray-400 hover:text-white">
+                                <i class="fa-solid fa-eye text-xs"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="space-y-1.5 md:col-span-2">
+                        <label class="text-xs font-medium text-gray-300">GOOGLE_REDIRECT_URI (URL Callback OAuth)</label>
+                        <input type="text" name="google_redirect_uri" value="{{ env_dict.GOOGLE_REDIRECT_URI }}" class="w-full px-3.5 py-2.5 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors" placeholder="http://YOUR_VPS_IP:20129/api/auth/google/callback">
+                    </div>
+                </div>
+            </div>
+
+            <!-- SECTION 4: SERVER PORTS & SAAS SECURITY -->
+            <div class="glass-panel p-6 rounded-2xl border border-gray-800/80">
+                <div class="flex items-center gap-3 pb-4 mb-4 border-b border-gray-800">
+                    <div class="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center font-bold">
+                        <i class="fa-solid fa-server"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-semibold text-white">4. Dual-Port VPS & Master Password</h3>
+                        <p class="text-xs text-gray-400">Port cabang Bot (20128) dan Web SaaS (20129) serta password master dashboard.</p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="space-y-1.5">
+                        <label class="text-xs font-medium text-gray-300">ADMIN_PASSWORD <span class="text-red-400">*</span></label>
+                        <div class="relative">
+                            <input type="password" id="field_admin_password" name="admin_password" value="{{ env_dict.ADMIN_PASSWORD }}" required class="w-full px-3.5 py-2.5 pr-10 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors">
+                            <button type="button" onclick="toggleVisibility('field_admin_password', this)" class="absolute right-3 top-2.5 text-gray-400 hover:text-white">
+                                <i class="fa-solid fa-eye text-xs"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <label class="text-xs font-medium text-gray-300">BOT_PORT (Default: 20128)</label>
+                        <input type="number" name="bot_port" value="{{ env_dict.BOT_PORT }}" class="w-full px-3.5 py-2.5 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors">
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <label class="text-xs font-medium text-gray-300">WEB_PORT (Default: 20129)</label>
+                        <input type="number" name="web_port" value="{{ env_dict.WEB_PORT }}" class="w-full px-3.5 py-2.5 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors">
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <label class="text-xs font-medium text-gray-300">HOST BIND</label>
+                        <input type="text" name="host" value="{{ env_dict.HOST }}" class="w-full px-3.5 py-2.5 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors">
+                    </div>
+
+                    <div class="space-y-1.5 md:col-span-2">
+                        <label class="text-xs font-medium text-gray-300">WEB_BASE_URL (URL Akses Web)</label>
+                        <input type="text" name="web_base_url" value="{{ env_dict.WEB_BASE_URL }}" class="w-full px-3.5 py-2.5 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors" placeholder="http://YOUR_VPS_IP:20129">
+                    </div>
+
+                    <div class="space-y-1.5 md:col-span-3">
+                        <label class="text-xs font-medium text-gray-300">DATABASE_URL (SQLAlchemy URI)</label>
+                        <input type="text" name="database_url" value="{{ env_dict.DATABASE_URL }}" class="w-full px-3.5 py-2.5 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors">
+                    </div>
+                </div>
+            </div>
+
+            <!-- SECTION 5: CRAWLER & SEARCH CRITERIA -->
+            <div class="glass-panel p-6 rounded-2xl border border-gray-800/80">
+                <div class="flex items-center gap-3 pb-4 mb-4 border-b border-gray-800">
+                    <div class="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center font-bold">
+                        <i class="fa-solid fa-magnifying-glass"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-semibold text-white">5. Kriteria Pencarian & Scheduler</h3>
+                        <p class="text-xs text-gray-400">Kata kunci lowongan magang, lokasi target, dan frekuensi crawling.</p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="space-y-1.5">
+                        <label class="text-xs font-medium text-gray-300">CHECK_INTERVAL_MINUTES (Interval Menit)</label>
+                        <input type="number" name="check_interval_minutes" value="{{ env_dict.CHECK_INTERVAL_MINUTES }}" class="w-full px-3.5 py-2.5 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors">
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <label class="text-xs font-medium text-gray-300">MAX_JOBS_PER_RUN (Limit Lowongan per Crawl)</label>
+                        <input type="number" name="max_jobs_per_run" value="{{ env_dict.MAX_JOBS_PER_RUN }}" class="w-full px-3.5 py-2.5 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors">
+                    </div>
+
+                    <div class="space-y-1.5 md:col-span-2">
+                        <label class="text-xs font-medium text-gray-300">SEARCH_KEYWORDS (Pisahkan koma)</label>
+                        <input type="text" name="search_keywords" value="{{ env_dict.SEARCH_KEYWORDS }}" class="w-full px-3.5 py-2.5 rounded-xl bg-gray-900/90 border border-gray-700 text-sm text-white focus:outline-none focus:border-brand-500 transition-colors">
+                    </div>
+
+                    <div class="space-y-1.5 md:col-span-2">
+                        <label class="text-xs font-medium text-gray-300">SEARCH_LOCATIONS (Pisahkan koma)</label>
+                        <input type="text" name="search_locations" value="{{ env_dict.SEARCH_LOCATIONS }}" class="w-full px-3.5 py-2.5 rounded-xl bg-gray-900/90 border border-gray-700 text-sm text-white focus:outline-none focus:border-brand-500 transition-colors">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Submit Button Bar -->
+            <div class="flex items-center justify-end gap-3 sticky bottom-4 p-4 rounded-2xl glass-panel border border-brand-500/30 shadow-2xl z-20">
+                <a href="/admin/dashboard" class="px-5 py-2.5 rounded-xl text-sm font-medium text-gray-400 hover:text-white transition-colors">
+                    Batal
+                </a>
+                <button type="submit" class="px-6 py-2.5 rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white font-medium text-sm shadow-lg shadow-brand-500/30 transition-all flex items-center gap-2">
+                    <i class="fa-solid fa-floppy-disk"></i>
+                    Simpan Perubahan ke .env
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- VIEW 2: RAW TEXTAREA EDITOR -->
+    <div id="viewRaw" class="space-y-4 hidden">
+        <div class="glass-panel p-6 rounded-2xl border border-gray-800/80">
+            <div class="flex items-center justify-between pb-4 mb-4 border-b border-gray-800">
+                <div>
+                    <h3 class="text-base font-semibold text-white flex items-center gap-2">
+                        <i class="fa-solid fa-terminal text-emerald-400"></i>
+                        Editor Langsung File .env
+                    </h3>
+                    <p class="text-xs text-gray-400 mt-0.5">Edit atau salin-tempel seluruh konfigurasi .env mentah secara leluasa.</p>
+                </div>
+                <button type="button" onclick="copyRawEnv()" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 flex items-center gap-1.5 transition-colors">
+                    <i class="fa-solid fa-copy"></i>
+                    Salin Teks
+                </button>
+            </div>
+
+            <form action="/admin/settings/raw" method="POST" class="space-y-4">
+                <textarea id="rawTextarea" name="raw_env_content" rows="22" required class="w-full px-4 py-3 rounded-xl bg-gray-950 border border-gray-800 text-emerald-400 font-mono text-xs leading-relaxed focus:outline-none focus:border-brand-500 transition-colors">{{ raw_content }}</textarea>
+
+                <div class="flex items-center justify-end gap-3 pt-2">
+                    <button type="submit" class="px-6 py-2.5 rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white font-medium text-sm shadow-lg shadow-brand-500/30 transition-all flex items-center gap-2">
+                        <i class="fa-solid fa-floppy-disk"></i>
+                        Simpan File Mentah
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+    function switchTab(mode) {
+        const formView = document.getElementById('viewForm');
+        const rawView = document.getElementById('viewRaw');
+        const tabBtnForm = document.getElementById('tabBtnForm');
+        const tabBtnRaw = document.getElementById('tabBtnRaw');
+
+        if (mode === 'form') {
+            formView.classList.remove('hidden');
+            rawView.classList.add('hidden');
+            tabBtnForm.className = "px-4 py-2.5 text-sm font-semibold border-b-2 border-brand-500 text-brand-400 flex items-center gap-2 transition-all";
+            tabBtnRaw.className = "px-4 py-2.5 text-sm font-semibold border-b-2 border-transparent text-gray-400 hover:text-gray-200 flex items-center gap-2 transition-all";
+        } else {
+            formView.classList.add('hidden');
+            rawView.classList.remove('hidden');
+            tabBtnRaw.className = "px-4 py-2.5 text-sm font-semibold border-b-2 border-brand-500 text-brand-400 flex items-center gap-2 transition-all";
+            tabBtnForm.className = "px-4 py-2.5 text-sm font-semibold border-b-2 border-transparent text-gray-400 hover:text-gray-200 flex items-center gap-2 transition-all";
+        }
+    }
+
+    function toggleVisibility(inputId, btn) {
+        const input = document.getElementById(inputId);
+        const icon = btn.querySelector('i');
+        if (input.type === 'password') {
+            input.type = 'text';
+            icon.className = 'fa-solid fa-eye-slash text-xs';
+        } else {
+            input.type = 'password';
+            icon.className = 'fa-solid fa-eye text-xs';
+        }
+    }
+
+    function copyRawEnv() {
+        const textarea = document.getElementById('rawTextarea');
+        navigator.clipboard.writeText(textarea.value).then(() => {
+            alert('Isi .env berhasil disalin ke clipboard!');
+        });
+    }
+</script>
+{% endblock %}

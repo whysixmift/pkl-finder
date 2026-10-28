@@ -41,6 +41,31 @@ def admin_only(func):
         return await func(update, context, *args, **kwargs)
     return wrapper
 
+def whitelist_required(func):
+    """Decorator to verify that user is authorized via SaaS User Whitelist (Username / User ID) or is Admin."""
+    @wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        if not update.effective_user:
+            return
+        user_id = update.effective_user.id
+        username = update.effective_user.username
+
+        from app.agents.access_control_agent import access_control_agent
+        is_allowed = await access_control_agent.is_allowed(user_id, username)
+        if not is_allowed:
+            logger.warning(f"Unauthorized SaaS access attempt by Telegram User {user_id} (@{username})")
+            if update.effective_message:
+                user_display = f"@{username}" if username else f"ID: {user_id}"
+                await update.effective_message.reply_text(
+                    f"🔒 <b>Akses SaaS Terbatas (Private Beta)</b>\n\n"
+                    f"Akun Telegram Anda (<code>{user_display}</code>) belum terdaftar dalam whitelist PKL Finder SaaS.\n\n"
+                    f"Silakan hubungi Administrator untuk menambahkan username atau user ID Anda ke whitelist bot.",
+                    parse_mode="HTML"
+                )
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapper
+
 def error_boundary(func):
     """Catches all exceptions to prevent bot crashes and replies with helpful diagnostics."""
     @wraps(func)
@@ -125,18 +150,38 @@ def get_job_keyboard(job: Job, is_fav: bool = False) -> InlineKeyboardMarkup:
 
 @error_boundary
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    username = update.effective_user.username
+    from app.agents.access_control_agent import access_control_agent
+    is_allowed = await access_control_agent.is_allowed(user_id, username)
+
+    if not is_allowed:
+        user_display = f"@{username}" if username else f"ID: {user_id}"
+        restricted_text = (
+            "🔒 <b>Selamat Datang di PKL Finder SaaS!</b>\n\n"
+            f"Akun Anda (<code>{user_display}</code>) saat ini belum terdaftar di <b>whitelist</b>.\n\n"
+            "📋 <b>Informasi Akun Anda:</b>\n"
+            f"• Telegram User ID: <code>{user_id}</code>\n"
+            f"• Username: <code>@{username or 'Tidak ada'}</code>\n\n"
+            "👉 <i>Kirimkan ID atau Username di atas ke Administrator untuk membuka akses penuh ke bot ini.</i>"
+        )
+        await update.message.reply_text(restricted_text, parse_mode="HTML")
+        return
+
     welcome_text = (
-        "🤖 <b>PKL Finder - Autonomous Assistant</b>\n\n"
+        "🤖 <b>PKL Finder - Multi-Tenant AI Assistant</b>\n\n"
         "Asisten AI otonom untuk pencarian lowongan magang/PKL, crawler perusahaan, "
-        "kolektor email rekrutmen, dan SMTP email dispatcher otonom.\n\n"
+        "kolektor email rekrutmen, dan auto-dispatcher email dengan Google SSO & SMTP.\n\n"
+        "Status: 🟢 <b>Akses SaaS Terverifikasi</b>\n\n"
         "Kirim /help untuk melihat semua daftar perintah yang tersedia."
     )
     await update.message.reply_text(welcome_text, parse_mode="HTML")
 
 @error_boundary
+@whitelist_required
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = (
-        "📖 <b>Daftar Perintah PKL Finder Bot:</b>\n\n"
+        "📖 <b>Daftar Perintah PKL Finder SaaS Bot:</b>\n\n"
         "🔍&nbsp;<b>Pencarian & Informasi:</b>\n"
         "/search - Jalankan scraping lowongan secara realtime\n"
         "/latest - Tampilkan 10 lowongan magang rekomendasi terbaru\n"
@@ -148,15 +193,17 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/uploadcv - Unggah CV baru (.PDF atau .DOCX)\n"
         "/uploadportfolio - Atur URL portofolio atau unggah file\n"
         "/uploadcoverletter - Atur template cover letter pendukung\n\n"
-        "📧&nbsp;<b>SMTP & Application Queue:</b>\n"
-        "/credentials - Konfigurasi SMTP email pengirim\n"
-        "/email - Periksa konfigurasi SMTP aktif\n"
-        "/queue - Tampilkan draft email antrean AI\n"
+        "📧&nbsp;<b>Pengiriman Email (Google SSO & SMTP):</b>\n"
+        "/connect_google - 🔑 Hubungkan Google SSO (Gmail API) untuk kirim email\n"
+        "/credentials - Konfigurasi SMTP email pengirim manual\n"
+        "/email - Periksa konfigurasi email pengirim aktif\n"
+        "/queue - Tampilkan draft email antrean AI (dengan lampiran CV)\n"
         "/sendall - Dispatch semua email approved\n\n"
         "🏢&nbsp;<b>Company Discovery:</b>\n"
         "/companies - Tampilkan daftar perusahaan terdaftar\n"
         "/openapplications - Tampilkan daftar email Open Applications\n\n"
-        "🛠&nbsp;<b>Admin Diagnostics:</b>\n"
+        "🛠&nbsp;<b>Admin Diagnostics & Multi-Agent:</b>\n"
+        "/agents - Status sistem 8 Agen Otonom (1 Feature = 1 Agent)\n"
         "/health - Periksa status kesehatan platform\n"
         "/models - Status latensi OpenRouter & failover\n"
         "/providers - Skor kesehatan & status scraper\n"
@@ -173,6 +220,7 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 # ----------------- SYSTEM & CORE COMMAND HANDLERS -----------------
 
 @error_boundary
+@whitelist_required
 async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     await update.message.reply_text("🔍 <i>Memulai scraping dan matching AI...</i>", parse_mode="HTML")
@@ -199,6 +247,7 @@ async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("✅ Scraping selesai! Tidak ada lowongan baru yang direkomendasikan saat ini.")
 
 @error_boundary
+@whitelist_required
 async def latest_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     jobs = await job_service.get_latest_jobs(user_id=user_id, limit=10, recommended_only=True)
@@ -213,6 +262,7 @@ async def latest_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 @error_boundary
+@whitelist_required
 async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Check completeness of user CV, portfolio, cover letter."""
     user_id = update.effective_user.id
@@ -258,6 +308,7 @@ async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text(config_text, parse_mode="HTML")
 
 @error_boundary
+@whitelist_required
 async def favorites_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     jobs = await job_service.get_favorites(user_id=user_id)
@@ -272,6 +323,7 @@ async def favorites_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 @error_boundary
+@whitelist_required
 async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     history = await job_service.get_history(user_id=user_id, limit=10)
@@ -286,6 +338,7 @@ async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text(text, parse_mode="HTML")
 
 @error_boundary
+@whitelist_required
 async def recheck_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     await update.message.reply_text("🔄 <i>Memulai evaluasi ulang semua lowongan terhadap CV aktif...</i>", parse_mode="HTML")
@@ -293,6 +346,7 @@ async def recheck_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text(f"✅ Evaluasi ulang selesai! {len(newly_recommended)} lowongan kini direkomendasikan.")
 
 @error_boundary
+@whitelist_required
 async def uploadcv_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["state"] = "AWAITING_CV"
     await update.message.reply_text(
@@ -301,6 +355,7 @@ async def uploadcv_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 @error_boundary
+@whitelist_required
 async def uploadportfolio_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["state"] = "AWAITING_PORTFOLIO"
     await update.message.reply_text(
@@ -309,6 +364,7 @@ async def uploadportfolio_handler(update: Update, context: ContextTypes.DEFAULT_
     )
 
 @error_boundary
+@whitelist_required
 async def uploadcoverletter_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["state"] = "AWAITING_COVER_LETTER"
     await update.message.reply_text(
@@ -319,6 +375,7 @@ async def uploadcoverletter_handler(update: Update, context: ContextTypes.DEFAUL
 # ----------------- SMTP CONFIGS (CONVERSATIONAL STATE) -----------------
 
 @error_boundary
+@whitelist_required
 async def credentials_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["state"] = "SMTP_HOST"
     context.user_data["smtp_setup"] = {}
@@ -610,6 +667,7 @@ async def logs_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 # ----------------- EMAIL QUEUE ACTIONS -----------------
 
 @error_boundary
+@whitelist_required
 async def queue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List pending drafts in the user's approval queue."""
     user_id = update.effective_user.id
@@ -624,9 +682,11 @@ async def queue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         await update.message.reply_text(f"✉️ <b>Daftar Draft Email Pending ({len(drafts)} pertama):</b>", parse_mode="HTML")
         for draft in drafts:
+            att_text = "📎 <b>Lampiran:</b> CV Terlampir (.PDF / .DOCX)\n" if draft.attachments else "📎 <b>Lampiran:</b> Tidak ada lampiran\n"
             text = (
                 f"🏢 <b>Perusahaan:</b> <code>{draft.company.name}</code>\n"
                 f"📧 <b>Penerima:</b> <code>{draft.recipient_email}</code>\n"
+                f"{att_text}"
                 f"📝 <b>Subject:</b> {draft.subject}\n\n"
                 f"<b>Body Preview:</b>\n<i>{draft.body[:300]}...</i>"
             )
@@ -645,36 +705,22 @@ async def queue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
 
 @error_boundary
+@whitelist_required
 async def sendall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     await update.message.reply_text("⏳ <i>Mulai mendispatch semua email approved...</i>", parse_mode="HTML")
-    
-    async with async_session_maker() as session:
-        stmt = select(EmailQueue).where((EmailQueue.status == "approved") & (EmailQueue.user_id == user_id))
-        res = await session.execute(stmt)
-        approved_emails = res.scalars().all()
-        
-        if not approved_emails:
-            await update.message.reply_text("📭 Tidak ada email dengan status 'approved' dalam antrean.")
-            return
+    from app.agents.email_dispatch_agent import email_dispatch_agent
+    res = await email_dispatch_agent.dispatch_approved_queue(user_id=user_id)
+    sent_count = res.get("sent", 0)
+    failed_count = res.get("failed", 0)
 
-        sent_count = 0
-        failed_count = 0
-        for email in approved_emails:
-            try:
-                success = await email_service.send_email(session, email.id)
-                if success:
-                    sent_count += 1
-            except Exception as se:
-                logger.error(f"Failed to send email ID {email.id}: {se}")
-                failed_count += 1
-                
-        await update.message.reply_text(
-            f"✅ Dispatch Selesai!\n- Terkirim: <code>{sent_count}</code>\n- Gagal: <code>{failed_count}</code>",
-            parse_mode="HTML"
-        )
+    await update.message.reply_text(
+        f"✅ <b>Dispatch Antrean Selesai!</b>\n- Terkirim: <code>{sent_count}</code>\n- Gagal: <code>{failed_count}</code>",
+        parse_mode="HTML"
+    )
 
 @error_boundary
+@whitelist_required
 async def companies_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     async with async_session_maker() as session:
         stmt = select(Company).limit(15)
@@ -693,6 +739,7 @@ async def companies_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text(comp_text, parse_mode="HTML", disable_web_page_preview=True)
 
 @error_boundary
+@whitelist_required
 async def openapplications_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Lists companies where a recruitment email is discovered, ready for Open Applications."""
     async with async_session_maker() as session:
@@ -954,14 +1001,82 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except Exception as e:
         logger.error(f"Error handling callback button: {e}", exc_info=True)
 
+@error_boundary
+@whitelist_required
+async def connect_google_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send Google SSO OAuth authorization URL to user for Gmail API email sending."""
+    user_id = update.effective_user.id
+    from app.services.google_auth_service import google_auth_service
+    auth_url = google_auth_service.get_authorization_url(user_id)
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔑 Login Google SSO (Izin Kirim Email)", url=auth_url)]
+    ])
+
+    text = (
+        "🔐 <b>Login Email Menggunakan Google SSO (Gmail API)</b>\n\n"
+        "Klik tombol di bawah untuk mengizinkan bot PKL Finder mengirim email lamaran magang Anda "
+        "secara langsung melalui akun Google Anda dengan lampiran CV lengkap.\n\n"
+        f"🔗 <b>Atau buka URL ini di browser Anda:</b>\n<code>{auth_url}</code>\n\n"
+        "<i>Setelah selesai login di browser, bot akan otomatis terhubung!</i>"
+    )
+    await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+@error_boundary
+@whitelist_required
 async def email_handler_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+    from app.services.google_auth_service import google_auth_service
     async with async_session_maker() as session:
+        google_auth = await google_auth_service.get_active_auth(session, user_id)
         config = await email_service.get_active_config(session, user_id)
+
+    lines = ["📧 <b>Konfigurasi Pengiriman Email Anda:</b>\n"]
+    if google_auth:
+        lines.append(
+            f"🟢 <b>Google SSO (Gmail API):</b> AKTIF\n"
+            f"• Email Pengirim: <code>{google_auth.email}</code>\n"
+            f"• Izin: <code>Direct Gmail API Send (dengan lampiran CV)</code>\n"
+        )
     if config:
-        await update.message.reply_text(f"📧 <b>SMTP Terkonfigurasi:</b>\nHost: <code>{config.host}</code>\nPort: <code>{config.port}</code>\nUser: <code>{config.username}</code>", parse_mode="HTML")
-    else:
-        await update.message.reply_text("📭 SMTP belum dikonfigurasi. Jalankan /credentials.")
+        lines.append(
+            f"🔵 <b>SMTP Server:</b> AKTIF\n"
+            f"• Host: <code>{config.host}</code>\n"
+            f"• Port: <code>{config.port}</code>\n"
+            f"• User: <code>{config.username}</code>\n"
+        )
+    if not google_auth and not config:
+        lines.append(
+            "⚠️ <b>Belum ada konfigurasi pengiriman email!</b>\n\n"
+            "Silakan hubungkan akun email Anda:\n"
+            "1. <b>Google SSO (Rekomendasi):</b> Jalankan /connect_google untuk login 1-klik dengan Google.\n"
+            "2. <b>SMTP Manual:</b> Jalankan /credentials untuk mengatur kredensial SMTP."
+        )
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+@admin_only
+@error_boundary
+async def agents_status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Display real-time multi-agent system status to admin."""
+    from app.agents import (
+        scraper_agent, discovery_agent, cv_agent, matching_agent,
+        email_drafting_agent, email_dispatch_agent, access_control_agent, scheduler_agent
+    )
+    agents = [
+        scraper_agent, discovery_agent, cv_agent, matching_agent,
+        email_drafting_agent, email_dispatch_agent, access_control_agent, scheduler_agent
+    ]
+    lines = ["🤖 <b>Status Telemetri Sistem Multi-Agent (1 Feature = 1 Agent):</b>\n"]
+    for ag in agents:
+        st = ag.get_status()
+        badge = "🟢" if st["status"] != "Error" else "🔴"
+        lines.append(
+            f"{badge} <b>{st['name']}</b> ({st['status']})\n"
+            f"   • Fitur: <i>{st['feature']}</i>\n"
+            f"   • Runs: <code>{st['total_runs']}</code> | Dur: <code>{st['duration_sec']}s</code>\n"
+        )
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 def setup_bot(application) -> None:
     """Registers all commands and handlers with the PTB Application."""
@@ -978,9 +1093,10 @@ def setup_bot(application) -> None:
     application.add_handler(CommandHandler("uploadportfolio", uploadportfolio_handler))
     application.add_handler(CommandHandler("uploadcoverletter", uploadcoverletter_handler))
     
-    # SMTP configs
+    # SMTP & Google SSO configs
     application.add_handler(CommandHandler("credentials", credentials_handler))
     application.add_handler(CommandHandler("email", email_handler_fallback))
+    application.add_handler(CommandHandler("connect_google", connect_google_handler))
     
     # Email queue management
     application.add_handler(CommandHandler("queue", queue_handler))
@@ -998,6 +1114,7 @@ def setup_bot(application) -> None:
     application.add_handler(CommandHandler("openapplications", openapplications_handler))
     
     # Admin commands (Subsystem Specifics)
+    application.add_handler(CommandHandler("agents", agents_status_handler))
     application.add_handler(CommandHandler("models", models_handler))
     application.add_handler(CommandHandler("providers", providers_handler))
     application.add_handler(CommandHandler("migrations", migrations_handler))

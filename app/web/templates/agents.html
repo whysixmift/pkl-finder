@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Multi-Agent Architecture - PKL Finder SaaS{% endblock %}
+{% block page_title %}Arsitektur Multi-Agent Otonom (1 Feature = 1 Agent){% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="glass-panel p-6 rounded-2xl border border-gray-800">
+        <h3 class="text-lg font-bold text-white flex items-center gap-2">
+            <i class="fa-solid fa-network-wired text-indigo-400"></i>
+            Spesifikasi Arsitektur Multi-Agent Otonom
+        </h3>
+        <p class="text-xs text-gray-400 mt-1">
+            Setiap fitur utama dalam codebase didelegasikan kepada agen otonom khusus yang bertanggung jawab penuh atas tugas, error-handling, telemetri, dan isolasi prosesnya masing-masing.
+        </p>
+    </div>
+
+    <!-- Agent Cards Detailed View -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        {% for agent in agents %}
+        <div class="glass-panel rounded-2xl border border-gray-800 p-5 flex flex-col justify-between hover:border-indigo-500/30 transition">
+            <div>
+                <div class="flex items-center justify-between mb-3">
+                    <span class="text-sm font-mono font-bold text-white flex items-center gap-2">
+                        <i class="fa-solid fa-robot text-indigo-400 text-xs"></i>
+                        {{ agent.name }}
+                    </span>
+                    {% if agent.status == 'Running' %}
+                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">RUNNING</span>
+                    {% elif agent.status == 'Error' %}
+                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">ERROR</span>
+                    {% else %}
+                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">IDLE / HEALTHY</span>
+                    {% endif %}
+                </div>
+                <p class="text-xs text-gray-300 mb-4">{{ agent.feature }}</p>
+                
+                <div class="space-y-2 text-xs font-mono bg-gray-950/60 p-3 rounded-xl border border-gray-800/80">
+                    <div class="flex justify-between text-gray-400">
+                        <span>Total Runs:</span>
+                        <span class="text-white">{{ agent.total_runs }}</span>
+                    </div>
+                    <div class="flex justify-between text-gray-400">
+                        <span>Berhasil / Gagal:</span>
+                        <span class="text-white"><span class="text-emerald-400">{{ agent.successful_runs }}</span> / <span class="text-red-400">{{ agent.failed_runs }}</span></span>
+                    </div>
+                    <div class="flex justify-between text-gray-400">
+                        <span>Durasi Eksekusi Terakhir:</span>
+                        <span class="text-white">{{ agent.duration_sec }} detik</span>
+                    </div>
+                    <div class="flex justify-between text-gray-400">
+                        <span>Waktu Terakhir:</span>
+                        <span class="text-gray-300 text-[10px]">{{ agent.last_run or 'Belum dijalankan' }}</span>
+                    </div>
+                </div>
+
+                {% if agent.last_error %}
+                <div class="mt-3 p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-[11px] text-red-300">
+                    <b class="font-mono">Error:</b> {{ agent.last_error }}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

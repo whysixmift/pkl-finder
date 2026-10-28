@@ -197,25 +197,39 @@ class OpenRouterProvider(BaseLLMProvider):
             logger.error(f"LLM evaluation failed, executing local regex fallback: {e}")
             return self._fallback_evaluate(title, company, location, description)
 
-    async def write_cold_email(self, company_name: str, cv_text: str) -> Tuple[str, str]:
+    async def write_cold_email(
+        self,
+        company_name: str,
+        cv_text: str,
+        job_title: Optional[str] = None,
+        job_description: Optional[str] = None
+    ) -> Tuple[str, str]:
         """Generates cold application emails seeking internships, matching candidate profile parameters."""
-        system_prompt = """
-        You are a professional email copywriter writing unique cold emails for internship applications.
-        Write a concise, professional, and convincing cold email to the recruitment team requesting a PKL / internship.
-        Do NOT use generic templates. Write the actual company name and candidate details.
+        effective_cv = cv_text.strip() if cv_text and cv_text.strip() else CANDIDATE_PROFILE.strip()
+        role_context = f"Applying for role: {job_title}" if job_title else "Seeking PKL / Internship opening"
+        desc_context = f"\nJob Context / Description: {job_description[:300]}" if job_description else ""
+
+        system_prompt = f"""
+        You are an elite, highly persuasive cold email copywriter specializing in tech internship and PKL applications.
+        Write a concise, high-converting, professional, and personalized cold outreach email to the recruitment / engineering team at {company_name}.
         
-        The candidate is:
-        Name: Julian
-        School: SMK Negeri 2 Bekasi (Rekayasa Perangkat Lunak / Software Engineering)
-        Skills: Python, Java, C++, Robotics, Embedded Systems, IoT, Git.
-        Experience: FIRST Tech Challenge, Hack Club Mentor.
-        Looking for: PKL (Praktek Kerja Lapangan) or Internship.
+        Strict Requirements:
+        - NEVER use generic placeholder templates.
+        - Tailor the pitch directly to {company_name} and the candidate's actual qualifications from their CV.
+        - Tone: Enthusiastic, highly competent, polite, professional Indonesian (or formal bilingual if appropriate).
+        - State clearly that the candidate's complete CV is attached to this email.
         
-        You must output ONLY a JSON object with:
-        {
-          "subject": "Unique, catchy subject line",
-          "body": "Complete email body"
-        }
+        Candidate CV Information:
+        {effective_cv[:1500]}
+        
+        Position / Target Context:
+        {role_context}{desc_context}
+        
+        Output MUST be ONLY a valid JSON object with exact keys:
+        {{
+          "subject": "Unique, compelling subject line (e.g., Permohonan PKL / Magang [Role] - [Candidate Name])",
+          "body": "Complete, polite, and persuasive email body with professional sign-off and mention of attached CV."
+        }}
         """
 
         def payload_factory(model_id: str) -> Dict[str, Any]:
@@ -223,21 +237,43 @@ class OpenRouterProvider(BaseLLMProvider):
                 "model": model_id,
                 "messages": [
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Write an internship application email to: {company_name}"}
+                    {"role": "user", "content": f"Draft the personalized internship application email for {company_name}."}
                 ],
                 "response_format": {"type": "json_object"}
             }
 
-        data = await self._post_with_fallback(payload_factory)
-        content = data["choices"][0]["message"]["content"].strip()
-        
-        if content.startswith("```"):
-            match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", content)
-            if match:
-                content = match.group(1)
+        try:
+            data = await self._post_with_fallback(payload_factory)
+            content = data["choices"][0]["message"]["content"].strip()
+            
+            if content.startswith("```"):
+                match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", content)
+                if match:
+                    content = match.group(1)
 
-        parsed = json.loads(content)
-        return parsed["subject"], parsed["body"]
+            parsed = json.loads(content)
+            subject = parsed.get("subject", f"Permohonan Magang / PKL di {company_name}")
+            body = parsed.get("body", "")
+            if subject and body:
+                return subject, body
+        except Exception as e:
+            logger.warning(f"OpenRouter cold email drafting failed ({e}), generating local tailored fallback.")
+
+        # Local intelligent fallback
+        target_role = job_title or "Software Engineer / IT Intern"
+        fallback_subject = f"Aplikasi PKL / Magang ({target_role}) - {company_name}"
+        fallback_body = (
+            f"Yth. Tim Rekrutmen & HRD {company_name},\n\n"
+            f"Perkenalkan, saya tertarik untuk mengajukan permohonan program Praktik Kerja Lapangan (PKL) / Magang di {company_name} "
+            f"untuk posisi {target_role}.\n\n"
+            f"Berdasarkan latar belakang teknis yang saya miliki, saya memiliki ketertarikan mendalam dan pengalaman langsung dalam pengembangan software, problem solving, dan kolaborasi tim. "
+            f"Saya sangat mengagumi inovasi yang dijalankan oleh {company_name} dan yakin dapat memberikan kontribusi aktif selama periode magang.\n\n"
+            f"Sebagai bahan pertimbangan Bapak/Ibu, Curriculum Vitae (CV) lengkap saya telah saya lampirkan pada email ini.\n\n"
+            f"Besar harapan saya untuk mendapatkan kesempatan wawancara atau diskusi lebih lanjut. Terima kasih banyak atas perhatian dan waktu Bapak/Ibu.\n\n"
+            f"Hormat saya,\n"
+            f"Kandidat PKL Finder"
+        )
+        return fallback_subject, fallback_body
 
     def _parse_ai_response(self, content: str) -> AIResult:
         """Ensure the LLM response adheres to the strict Pydantic output schema."""

@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard Overview - PKL Finder SaaS{% endblock %}
+{% block page_title %}Executive Dashboard Overview{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Stat Cards Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+        <!-- Total PT Searched / Discovered -->
+        <div class="glass-panel p-5 rounded-2xl border border-gray-800 relative overflow-hidden group hover:border-indigo-500/40 transition">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Total PT / Perusahaan</p>
+                    <h3 class="text-3xl font-extrabold text-white mt-2">{{ stats.total_companies }}</h3>
+                    <p class="text-xs text-indigo-400 mt-1 flex items-center gap-1 font-medium">
+                        <i class="fa-solid fa-building-circle-check"></i>
+                        <span>{{ stats.discovered_companies }} via Auto-Discovery</span>
+                    </p>
+                </div>
+                <div class="w-12 h-12 rounded-xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center text-xl group-hover:scale-110 transition-transform">
+                    <i class="fa-solid fa-city"></i>
+                </div>
+            </div>
+            <div class="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-indigo-500 to-purple-500"></div>
+        </div>
+
+        <!-- Total Lowongan / Jobs Scraped -->
+        <div class="glass-panel p-5 rounded-2xl border border-gray-800 relative overflow-hidden group hover:border-blue-500/40 transition">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Total Lowongan Magang</p>
+                    <h3 class="text-3xl font-extrabold text-white mt-2">{{ stats.total_jobs }}</h3>
+                    <p class="text-xs text-blue-400 mt-1 flex items-center gap-1 font-medium">
+                        <i class="fa-solid fa-briefcase"></i>
+                        <span>Tersimpan & Tervalidasi</span>
+                    </p>
+                </div>
+                <div class="w-12 h-12 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center text-xl group-hover:scale-110 transition-transform">
+                    <i class="fa-solid fa-magnifying-glass-chart"></i>
+                </div>
+            </div>
+            <div class="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-500 to-cyan-500"></div>
+        </div>
+
+        <!-- Whitelisted Users -->
+        <div class="glass-panel p-5 rounded-2xl border border-gray-800 relative overflow-hidden group hover:border-emerald-500/40 transition">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Pengguna Whitelist Bot</p>
+                    <h3 class="text-3xl font-extrabold text-white mt-2">{{ stats.whitelisted_users }}</h3>
+                    <p class="text-xs text-emerald-400 mt-1 flex items-center gap-1 font-medium">
+                        <i class="fa-solid fa-shield-halved"></i>
+                        <span>Akses Bot & Web SaaS</span>
+                    </p>
+                </div>
+                <div class="w-12 h-12 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center text-xl group-hover:scale-110 transition-transform">
+                    <i class="fa-solid fa-users"></i>
+                </div>
+            </div>
+            <div class="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-500 to-teal-500"></div>
+        </div>
+
+        <!-- Email Applications Sent -->
+        <div class="glass-panel p-5 rounded-2xl border border-gray-800 relative overflow-hidden group hover:border-amber-500/40 transition">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Email Lamaran (Cold Outreach)</p>
+                    <h3 class="text-3xl font-extrabold text-white mt-2">{{ stats.sent_emails }}</h3>
+                    <p class="text-xs text-amber-400 mt-1 flex items-center gap-1 font-medium">
+                        <i class="fa-solid fa-paper-plane"></i>
+                        <span>{{ stats.draft_emails }} Draft Menunggu Approval</span>
+                    </p>
+                </div>
+                <div class="w-12 h-12 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center text-xl group-hover:scale-110 transition-transform">
+                    <i class="fa-solid fa-envelopes-bulk"></i>
+                </div>
+            </div>
+            <div class="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 to-orange-500"></div>
+        </div>
+    </div>
+
+    <!-- Multi-Agent Grid (1 Feature = 1 Agent) -->
+    <div class="glass-panel rounded-2xl border border-gray-800 p-6">
+        <div class="flex items-center justify-between mb-5">
+            <div>
+                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-microchip text-indigo-400"></i>
+                    Sistem Multi-Agent Otonom (1 Feature = 1 Agent)
+                </h3>
+                <p class="text-xs text-gray-400 mt-0.5">Arsitektur agen modular untuk scraping, matching, drafting, dispatch, dan akses.</p>
+            </div>
+            <a href="/admin/agents" class="text-xs text-indigo-400 hover:text-indigo-300 font-medium">Lihat Semua Telemetri &rarr;</a>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {% for agent in agents %}
+            <div class="bg-gray-950/60 border border-gray-800/80 rounded-xl p-4 flex flex-col justify-between hover:border-gray-700 transition">
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs font-mono font-bold text-white">{{ agent.name }}</span>
+                        {% if agent.status == 'Running' %}
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">RUNNING</span>
+                        {% elif agent.status == 'Error' %}
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">ERROR</span>
+                        {% else %}
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">HEALTHY</span>
+                        {% endif %}
+                    </div>
+                    <p class="text-[11px] text-gray-400 line-clamp-2">{{ agent.feature }}</p>
+                </div>
+                <div class="mt-4 pt-3 border-t border-gray-800/60 flex items-center justify-between text-[10px] text-gray-400 font-mono">
+                    <span>Runs: {{ agent.total_runs }}</span>
+                    <span>Dur: {{ agent.duration_sec }}s</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Two-Column Layout: Latest PT & Latest Jobs -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- PT Discovered List -->
+        <div class="glass-panel rounded-2xl border border-gray-800 p-6 flex flex-col">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-building text-indigo-400"></i>
+                    Daftar PT / Perusahaan Terbaru
+                </h3>
+                <a href="/admin/companies" class="text-xs text-indigo-400 hover:text-indigo-300">Lihat Semua PT &rarr;</a>
+            </div>
+
+            <div class="overflow-x-auto flex-1">
+                <table class="w-full text-left text-xs">
+                    <thead class="text-gray-400 border-b border-gray-800 font-mono text-[11px]">
+                        <tr>
+                            <th class="py-2.5 px-3">Nama PT / Company</th>
+                            <th class="py-2.5 px-3">Email Rekrutmen</th>
+                            <th class="py-2.5 px-3">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-800/60">
+                        {% for comp in recent_companies %}
+                        <tr class="hover:bg-gray-800/30 transition">
+                            <td class="py-2.5 px-3 font-medium text-white">
+                                <div class="font-semibold">{{ comp.name }}</div>
+                                {% if comp.website %}
+                                <a href="{{ comp.website }}" target="_blank" class="text-[10px] text-gray-400 hover:text-indigo-300 truncate max-w-[150px] inline-block">{{ comp.website }}</a>
+                                {% endif %}
+                            </td>
+                            <td class="py-2.5 px-3 font-mono text-[11px] text-indigo-300">
+                                {{ comp.recruitment_email or '<span class="text-gray-500">Belum ditemukan</span>' | safe }}
+                            </td>
+                            <td class="py-2.5 px-3">
+                                {% if comp.recruitment_email %}
+                                <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Email Ready</span>
+                                {% else %}
+                                <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-700/30 text-gray-400">Discovered</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="3" class="py-6 text-center text-gray-500">Belum ada PT yang tersimpan. Klik "Scrape Sekarang".</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Latest Scraped Jobs List -->
+        <div class="glass-panel rounded-2xl border border-gray-800 p-6 flex flex-col">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-briefcase text-blue-400"></i>
+                    Lowongan Magang Terbaru
+                </h3>
+                <a href="/admin/companies" class="text-xs text-blue-400 hover:text-blue-300">Semua Lowongan &rarr;</a>
+            </div>
+
+            <div class="overflow-x-auto flex-1">
+                <table class="w-full text-left text-xs">
+                    <thead class="text-gray-400 border-b border-gray-800 font-mono text-[11px]">
+                        <tr>
+                            <th class="py-2.5 px-3">Posisi & Perusahaan</th>
+                            <th class="py-2.5 px-3">Lokasi</th>
+                            <th class="py-2.5 px-3">Sumber</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-800/60">
+                        {% for job in recent_jobs %}
+                        <tr class="hover:bg-gray-800/30 transition">
+                            <td class="py-2.5 px-3 font-medium text-white">
+                                <a href="{{ job.url }}" target="_blank" class="hover:text-indigo-400 font-semibold line-clamp-1">{{ job.title }}</a>
+                                <div class="text-[11px] text-gray-400">{{ job.company_name }}</div>
+                            </td>
+                            <td class="py-2.5 px-3 text-gray-300 text-[11px]">{{ job.location }}</td>
+                            <td class="py-2.5 px-3 font-mono">
+                                <span class="px-1.5 py-0.5 rounded text-[10px] uppercase font-bold bg-gray-800 text-gray-300 border border-gray-700">
+                                    {{ job.source }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="3" class="py-6 text-center text-gray-500">Belum ada lowongan tersimpan.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

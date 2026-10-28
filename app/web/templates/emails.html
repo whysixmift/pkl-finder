@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}Antrean Cold Email - PKL Finder SaaS{% endblock %}
+{% block page_title %}Antrean & Dispatch Cold Email Lamaran{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="glass-panel p-6 rounded-2xl border border-gray-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+            <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-envelopes-bulk text-amber-400"></i>
+                Antrean Cold Email Lamaran Magang (AI Outreach)
+            </h3>
+            <p class="text-xs text-gray-400 mt-1">Draf email yang dibuat otomatis oleh AI dengan personalisasi berdasarkan CV kandidat dan info PT, lengkap dengan lampiran CV.</p>
+        </div>
+
+        <form action="/admin/emails/dispatch-all" method="POST" class="inline" onsubmit="return confirm('Kirim semua email yang sudah berstatus Approved?')">
+            <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-emerald-600/30 transition flex items-center gap-2">
+                <i class="fa-solid fa-paper-plane text-xs"></i>
+                <span>Dispatch Semua Email Approved</span>
+            </button>
+        </form>
+    </div>
+
+    <!-- Email Queue Table -->
+    <div class="glass-panel rounded-2xl border border-gray-800 overflow-hidden shadow-xl">
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs">
+                <thead class="bg-gray-950/70 text-gray-400 border-b border-gray-800 font-mono text-[11px] uppercase">
+                    <tr>
+                        <th class="py-3 px-4">ID</th>
+                        <th class="py-3 px-4">User ID</th>
+                        <th class="py-3 px-4">Penerima & Perusahaan</th>
+                        <th class="py-3 px-4">Subject & Pratinjau Teks</th>
+                        <th class="py-3 px-4">Lampiran CV</th>
+                        <th class="py-3 px-4">Status</th>
+                        <th class="py-3 px-4 text-right">Aksi</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-800/60">
+                    {% for email in emails %}
+                    <tr class="hover:bg-gray-800/30 transition">
+                        <td class="py-3 px-4 font-mono text-gray-500">
+                            #{{ email.id }}
+                        </td>
+                        <td class="py-3 px-4 font-mono text-indigo-300">
+                            {{ email.user_id }}
+                        </td>
+                        <td class="py-3 px-4">
+                            <span class="font-bold text-white block">{{ email.recipient_email }}</span>
+                            <span class="text-[11px] text-gray-400">Company ID: #{{ email.company_id }}</span>
+                        </td>
+                        <td class="py-3 px-4 max-w-xs">
+                            <div class="font-semibold text-white line-clamp-1">{{ email.subject }}</div>
+                            <div class="text-[11px] text-gray-400 line-clamp-2 mt-0.5">{{ email.body }}</div>
+                        </td>
+                        <td class="py-3 px-4">
+                            {% if email.attachments %}
+                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                <i class="fa-solid fa-paperclip text-[10px]"></i>
+                                Ada CV
+                            </span>
+                            {% else %}
+                            <span class="text-gray-500 text-[10px]">-</span>
+                            {% endif %}
+                        </td>
+                        <td class="py-3 px-4">
+                            {% if email.status == 'sent' %}
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">SENT</span>
+                            {% elif email.status == 'approved' %}
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/15 text-blue-400 border border-blue-500/30">APPROVED</span>
+                            {% elif email.status == 'failed' %}
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/15 text-red-400 border border-red-500/30" title="{{ email.error_message }}">FAILED</span>
+                            {% else %}
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">DRAFT</span>
+                            {% endif %}
+                        </td>
+                        <td class="py-3 px-4 text-right space-x-1.5">
+                            {% if email.status != 'sent' %}
+                            <form action="/admin/emails/{{ email.id }}/send" method="POST" class="inline">
+                                <button type="submit" class="px-3 py-1 bg-indigo-600/80 hover:bg-indigo-600 text-white rounded-lg text-[11px] font-semibold transition" title="Kirim via Google Gmail API atau SMTP">
+                                    Kirim
+                                </button>
+                            </form>
+                            {% else %}
+                            <span class="text-gray-500 font-mono text-[10px]">{{ email.sent_at.strftime('%m-%d %H:%M') if email.sent_at else 'Terkirim' }}</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="7" class="py-8 text-center text-gray-500">
+                            Tidak ada email dalam antrean saat ini.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

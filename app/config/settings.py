@@ -36,6 +36,19 @@ class Settings(BaseSettings):
     # Filtering Settings
     SCORE_THRESHOLD: int = 70
 
+    # SaaS, Ports & Admin Settings
+    ADMIN_PASSWORD: str = "uranium235aregoated"
+    BOT_PORT: int = 20128
+    WEB_PORT: int = 20129
+    HOST: str = "0.0.0.0"
+    WEB_BASE_URL: str = "http://localhost:20129"
+    SESSION_SECRET_KEY: str = "pkl-finder-secret-key-uranium235"
+
+    # Google SSO & Gmail API OAuth
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = ""
+
     # Search Configuration
     SEARCH_KEYWORDS: str = "internship software engineering,magang backend,intern iot,pkl rpl"
     SEARCH_LOCATIONS: str = "Jakarta,Bekasi,Depok,Tangerang,Bogor,Remote"
@@ -69,3 +82,13 @@ except ValidationError as e:
     print("=" * 60, file=sys.stderr)
     print("Please fix the environment variables and try again.", file=sys.stderr)
     sys.exit(1)
+
+
+def reload_settings() -> Settings:
+    """Reload settings from disk into singleton instance."""
+    global settings
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".env")
+    new_s = Settings(_env_file=env_path) if os.path.exists(env_path) else Settings()
+    for field_name in Settings.model_fields.keys():
+        setattr(settings, field_name, getattr(new_s, field_name))
+    return settings

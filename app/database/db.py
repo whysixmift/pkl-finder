@@ -29,11 +29,7 @@ def refresh_engine() -> None:
         echo=False,
         connect_args={"timeout": 30} if "sqlite" in settings.DATABASE_URL else {}
     )
-    async_session_maker = async_sessionmaker(
-        bind=engine,
-        expire_on_commit=False,
-        class_=AsyncSession
-    )
+    async_session_maker.configure(bind=engine)
 
 async def init_db() -> None:
     """Initialize database tables and run automatic migrations."""
@@ -66,12 +62,15 @@ async def init_db() -> None:
             # Perform schema validation on fresh database
             sync_url = settings.DATABASE_URL.replace("sqlite+aiosqlite:///", "sqlite:///")
             sync_engine = create_engine(sync_url)
-            success, report = perform_schema_audit(sync_engine)
-            if not success:
-                logger.critical("Fresh database schema audit FAILED! Report:")
-                for line in report:
-                    logger.critical(line)
-                sys.exit(1)
+            try:
+                success, report = perform_schema_audit(sync_engine)
+                if not success:
+                    logger.critical("Fresh database schema audit FAILED! Report:")
+                    for line in report:
+                        logger.critical(line)
+                    sys.exit(1)
+            finally:
+                sync_engine.dispose()
             logger.info("Fresh database verification SUCCESS.")
         else:
             # Existing database, execute programmatic migrations

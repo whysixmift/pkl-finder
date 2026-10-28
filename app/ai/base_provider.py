@@ -32,6 +32,12 @@ class BaseLLMProvider(ABC):
         pass
 
     @abstractmethod
-    async def write_cold_email(self, company_name: str, cv_text: str) -> Tuple[str, str]:
-        """Generate a personalized cover application email from CV."""
+    async def write_cold_email(
+        self,
+        company_name: str,
+        cv_text: str,
+        job_title: Optional[str] = None,
+        job_description: Optional[str] = None
+    ) -> Tuple[str, str]:
+        """Generate a personalized cover application email tailored to CV and company."""
         pass

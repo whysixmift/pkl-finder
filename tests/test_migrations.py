@@ -24,23 +24,30 @@ def verify_database_schema() -> bool:
     from app.database.schema_audit import perform_schema_audit
     from sqlalchemy import create_engine
     engine = create_engine(settings.DATABASE_URL.replace("sqlite+aiosqlite:///", "sqlite:///"))
-    success, _ = perform_schema_audit(engine)
-    return success
+    try:
+        success, _ = perform_schema_audit(engine)
+        return success
+    finally:
+        engine.dispose()
 
 class TestDatabaseMigrations(unittest.IsolatedAsyncioTestCase):
-    def setUp(self) -> None:
-        # Re-bind active db engine to test url
+    async def asyncSetUp(self) -> None:
+        self.orig_url = settings.DATABASE_URL
+        settings.DATABASE_URL = TEST_DATABASE_URL
+        from app.database.db import engine
+        await engine.dispose()
         refresh_engine()
-        # Resolve path and clean up test files
         self.db_path = get_db_file_path()
         assert self.db_path is not None
         self.cleanup_files()
-        
-        # Ensure data folder exists
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
 
-    def tearDown(self) -> None:
+    async def asyncTearDown(self) -> None:
+        from app.database.db import engine
+        await engine.dispose()
         self.cleanup_files()
+        settings.DATABASE_URL = self.orig_url
+        refresh_engine()
 
     def cleanup_files(self) -> None:
         if self.db_path and os.path.exists(self.db_path):

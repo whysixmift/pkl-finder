@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Login - PKL Finder SaaS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-[#0b0f19] text-gray-100 min-h-screen flex items-center justify-center p-4">
+    <div class="w-full max-w-md">
+        <!-- Logo Header -->
+        <div class="text-center mb-8">
+            <div class="inline-flex w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-400 items-center justify-center text-white text-2xl shadow-xl shadow-indigo-500/25 mb-4">
+                <i class="fa-solid fa-radar"></i>
+            </div>
+            <h1 class="text-2xl font-extrabold tracking-tight text-white">PKL Finder SaaS</h1>
+            <p class="text-sm text-gray-400 mt-1">Portal Khusus Administrator & Manajemen Platform</p>
+        </div>
+
+        <!-- Login Card -->
+        <div class="bg-gray-900/90 border border-gray-800 rounded-2xl p-8 shadow-2xl backdrop-blur-xl">
+            {% if error %}
+            <div class="mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-sm flex items-center gap-3">
+                <i class="fa-solid fa-triangle-exclamation text-base"></i>
+                <span>{{ error }}</span>
+            </div>
+            {% endif %}
+
+            <form action="/admin/login" method="POST" class="space-y-5">
+                <div>
+                    <label for="password" class="block text-xs font-semibold text-gray-300 uppercase tracking-wider mb-2">
+                        Master Admin Password
+                    </label>
+                    <div class="relative">
+                        <input
+                            type="password"
+                            id="password"
+                            name="password"
+                            required
+                            placeholder="Masukkan password admin..."
+                            autofocus
+                            class="w-full px-4 py-3 bg-gray-950/80 border border-gray-700/80 rounded-xl text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"
+                        >
+                        <div class="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400">
+                            <i class="fa-solid fa-key"></i>
+                        </div>
+                    </div>
+                    <p class="text-[11px] text-gray-500 mt-2">Gunakan master password yang telah dikonfigurasikan.</p>
+                </div>
+
+                <button
+                    type="submit"
+                    class="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm rounded-xl shadow-lg shadow-indigo-600/30 transition-all duration-200 flex items-center justify-center gap-2 group"
+                >
+                    <span>Masuk ke Dashboard</span>
+                    <i class="fa-solid fa-arrow-right text-xs group-hover:translate-x-1 transition-transform"></i>
+                </button>
+            </form>
+
+            <div class="mt-6 pt-6 border-t border-gray-800/80 text-center">
+                <p class="text-xs text-gray-500">
+                    Dual Service Architecture: Bot (Port 20128) & Web (Port 20129)
+                </p>
+            </div>
+        </div>
+
+        <div class="text-center mt-6">
+            <a href="/" class="text-xs text-gray-400 hover:text-indigo-400 transition-colors">
+                &larr; Kembali ke Landing Page
+            </a>
+        </div>
+    </div>
+</body>
+</html>

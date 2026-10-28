@@ -33,5 +33,8 @@ COPY . .
 # Ensure logs and data directories exist
 RUN mkdir -p logs data
 
+# Expose Bot (20128) and Web (20129) ports
+EXPOSE 20128 20129
+
 # Run main.py
 CMD ["python", "main.py"]

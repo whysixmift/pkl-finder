@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PKL Finder - Multi-Tenant AI Internship Hunter SaaS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-[#0b0f19] text-gray-100 min-h-screen">
+    <!-- Navbar -->
+    <header class="border-b border-gray-800/80 px-6 py-4 flex items-center justify-between max-w-7xl mx-auto">
+        <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-400 flex items-center justify-center text-white shadow-lg shadow-indigo-500/25">
+                <i class="fa-solid fa-radar text-lg"></i>
+            </div>
+            <div>
+                <span class="text-lg font-bold text-white">PKL Finder</span>
+                <span class="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-400 ml-1 border border-indigo-500/30">SaaS</span>
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-4">
+            <a href="/admin/login" class="px-4 py-2 rounded-xl text-xs font-semibold text-gray-300 hover:text-white hover:bg-gray-800 transition">
+                Admin Dashboard
+            </a>
+            <a href="/auth/google" class="px-4 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/30 transition flex items-center gap-1.5">
+                <i class="fa-brands fa-google"></i>
+                <span>Connect Google SSO</span>
+            </a>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="max-w-5xl mx-auto px-6 pt-20 pb-16 text-center">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 mb-6">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            Multi-Tenant Autonomous Internship Hunting Platform
+        </div>
+
+        <h1 class="text-4xl md:text-6xl font-extrabold text-white tracking-tight leading-tight">
+            Cari Magang & PKL Otomatis<br>
+            <span class="bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
+                Didukung AI & Multi-Agent Otonom
+            </span>
+        </h1>
+
+        <p class="mt-6 text-base md:text-lg text-gray-400 max-w-2xl mx-auto leading-relaxed">
+            Scraping multi-platform dari Glints, LinkedIn, Indeed, JobStreet, Kalibrr, & Google Jobs.
+            Evaluasi semantik AI berdasarkan CV Anda, dan kirim cold email lamaran otomatis dengan lampiran CV via Google Gmail API atau SMTP.
+        </p>
+
+        <div class="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
+            <a href="/admin/login" class="w-full sm:w-auto px-6 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm rounded-xl shadow-xl shadow-indigo-600/25 transition flex items-center justify-center gap-2">
+                <i class="fa-solid fa-gauge-high"></i>
+                <span>Buka Admin Dashboard</span>
+            </a>
+            <a href="/auth/google" class="w-full sm:w-auto px-6 py-3.5 bg-gray-900 hover:bg-gray-800 text-gray-200 border border-gray-700 font-semibold text-sm rounded-xl transition flex items-center justify-center gap-2">
+                <i class="fa-brands fa-google text-red-400"></i>
+                <span>Login Google SSO untuk Email</span>
+            </a>
+        </div>
+    </section>
+
+    <!-- Features Bento Grid -->
+    <section class="max-w-6xl mx-auto px-6 py-12">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div class="bg-gray-900/60 border border-gray-800 p-6 rounded-2xl">
+                <div class="w-12 h-12 rounded-xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center text-xl mb-4">
+                    <i class="fa-solid fa-spider"></i>
+                </div>
+                <h3 class="text-base font-bold text-white mb-2">Multi-Platform Crawler</h3>
+                <p class="text-xs text-gray-400 leading-relaxed">
+                    Scraping simultan dari 6 platform lowongan magang dengan rotasi User-Agent dan deduplikasi otomatis.
+                </p>
+            </div>
+
+            <div class="bg-gray-900/60 border border-gray-800 p-6 rounded-2xl">
+                <div class="w-12 h-12 rounded-xl bg-purple-500/10 text-purple-400 flex items-center justify-center text-xl mb-4">
+                    <i class="fa-solid fa-brain"></i>
+                </div>
+                <h3 class="text-base font-bold text-white mb-2">Semantic AI Matching</h3>
+                <p class="text-xs text-gray-400 leading-relaxed">
+                    Pencocokan akurat antara keahlian di CV Anda dan kualifikasi lowongan melalui model LLM OpenRouter dengan failover pintar.
+                </p>
+            </div>
+
+            <div class="bg-gray-900/60 border border-gray-800 p-6 rounded-2xl">
+                <div class="w-12 h-12 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center text-xl mb-4">
+                    <i class="fa-solid fa-paper-plane"></i>
+                </div>
+                <h3 class="text-base font-bold text-white mb-2">Google SSO & Gmail API</h3>
+                <p class="text-xs text-gray-400 leading-relaxed">
+                    Otorisasi 1-klik dengan akun Google untuk langsung mengirim cold email lamaran magang beserta lampiran CV secara otomatis.
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Dual Port VPS Architecture Info -->
+    <section class="max-w-4xl mx-auto px-6 py-12 text-center">
+        <div class="bg-gray-950/80 border border-gray-800 rounded-2xl p-6 font-mono text-xs">
+            <div class="text-gray-400 mb-2 font-bold uppercase tracking-wider">Dual Service Deployment Ready</div>
+            <div class="flex flex-col sm:flex-row justify-center gap-6 mt-4">
+                <div class="p-4 rounded-xl bg-gray-900 border border-emerald-500/30">
+                    <div class="text-emerald-400 font-bold text-sm">PORT 20128</div>
+                    <div class="text-gray-400 text-[11px] mt-1">Telegram Bot & Webhook Service</div>
+                </div>
+                <div class="p-4 rounded-xl bg-gray-900 border border-blue-500/30">
+                    <div class="text-blue-400 font-bold text-sm">PORT 20129</div>
+                    <div class="text-gray-400 text-[11px] mt-1">SaaS Web App & Admin Dashboard</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer class="border-t border-gray-800/80 py-8 text-center text-xs text-gray-500">
+        &copy; 2026 PKL Finder SaaS. Master Admin Protected.
+    </footer>
+</body>
+</html>
