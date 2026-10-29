@@ -1,4 +1,5 @@
 import re
+import asyncio
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy import select, func, or_
@@ -6,20 +7,21 @@ from app.agents.base_agent import BaseAgent
 from app.config.settings import settings
 from app.database.db import async_session_maker
 from app.database.models import UserWhitelist
+from app.services.admin_notifier import notify_admin_new_user, notify_user_approved
 from app.utils.logger import logger
 
 class AccessControlAgent(BaseAgent):
-    """Agent responsible for Multi-Tenant SaaS user whitelist authorization and management."""
+    """Agent responsible for Multi-Tenant SaaS user whitelist authorization, approval workflows, and governance."""
 
     def __init__(self) -> None:
         super().__init__(
             agent_name="AccessControlAgent",
-            feature_description="SaaS User Authorization & Whitelist Governance (Username & User ID)"
+            feature_description="SaaS User Authorization & Whitelist Approval Governance (Username, User ID & Email)"
         )
 
     async def is_allowed(self, user_id: int, username: Optional[str] = None) -> bool:
-        """Determines if a user has access to use the bot and SaaS features.
-        Admin is always authorized. Whitelisted users (by user ID or username) are authorized.
+        """Determines if a user has approved access to use the bot and SaaS features.
+        Admin is always authorized. Whitelisted users must be active and status=='approved'.
         """
         start = self.mark_start()
         try:
@@ -31,8 +33,11 @@ class AccessControlAgent(BaseAgent):
             clean_username = username.strip().lstrip("@").lower() if username else None
 
             async with async_session_maker() as session:
-                # Query whitelist table
-                stmt = select(UserWhitelist).where(UserWhitelist.is_active.is_(True))
+                # Query whitelist table for active and approved record
+                stmt = select(UserWhitelist).where(
+                    UserWhitelist.is_active.is_(True),
+                    UserWhitelist.status == "approved"
+                )
                 conditions = [UserWhitelist.telegram_id == user_id]
                 if clean_username:
                     conditions.append(func.lower(UserWhitelist.username) == clean_username)
@@ -60,10 +65,142 @@ class AccessControlAgent(BaseAgent):
             logger.error(f"[{self.agent_name}] Error validating access for user {user_id}: {e}")
             return False
 
+    async def get_or_create_pending_user(
+        self,
+        user_id: int,
+        username: Optional[str] = None,
+        email: Optional[str] = None,
+        source: str = "telegram",
+        details: Optional[str] = None
+    ) -> Tuple[UserWhitelist, bool]:
+        """Check if user is registered; if not, create a pending approval record and alert the admin."""
+        start = self.mark_start()
+        clean_username = username.strip().lstrip("@") if username else None
+
+        async with async_session_maker() as session:
+            stmt = select(UserWhitelist)
+            conditions = [UserWhitelist.telegram_id == user_id]
+            if clean_username:
+                conditions.append(func.lower(UserWhitelist.username) == clean_username.lower())
+            if email:
+                conditions.append(func.lower(UserWhitelist.email) == email.lower())
+            stmt = stmt.where(or_(*conditions))
+
+            res = await session.execute(stmt)
+            existing = res.scalar_one_or_none()
+
+            if existing:
+                self.mark_success(start)
+                return existing, False
+
+            # Create new pending record
+            new_user = UserWhitelist(
+                telegram_id=user_id if user_id > 0 else None,
+                username=clean_username,
+                email=email,
+                notes=f"Auto-registered via {source.upper()}",
+                status="pending",
+                source=source,
+                is_active=False
+            )
+            session.add(new_user)
+            await session.commit()
+            await session.refresh(new_user)
+
+            # Fire off admin notification
+            try:
+                asyncio.create_task(
+                    notify_admin_new_user(
+                        user_id=user_id,
+                        username=clean_username,
+                        email=email,
+                        source=source,
+                        details=details
+                    )
+                )
+            except Exception as e:
+                logger.error(f"Failed to queue admin alert task: {e}")
+
+            self.mark_success(start)
+            logger.info(f"[{self.agent_name}] Created pending registration for User {user_id} (@{clean_username})")
+            return new_user, True
+
+    async def approve_user(self, identifier: Any) -> Tuple[bool, str, Optional[int]]:
+        """Approve a pending or suspended user. Can be user_id (int/str) or whitelist_id."""
+        start = self.mark_start()
+        try:
+            async with async_session_maker() as session:
+                target = str(identifier).strip().lstrip("@")
+                stmt = select(UserWhitelist)
+
+                if target.isdigit():
+                    num_val = int(target)
+                    stmt = stmt.where(or_(UserWhitelist.id == num_val, UserWhitelist.telegram_id == num_val))
+                else:
+                    stmt = stmt.where(func.lower(UserWhitelist.username) == target.lower())
+
+                res = await session.execute(stmt)
+                user = res.scalar_one_or_none()
+
+                if not user:
+                    self.mark_failure(start, ValueError("User not found"))
+                    return False, f"User '{identifier}' tidak ditemukan.", None
+
+                user.status = "approved"
+                user.is_active = True
+                user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                await session.commit()
+
+                target_tg_id = user.telegram_id
+                if target_tg_id:
+                    asyncio.create_task(notify_user_approved(target_tg_id))
+
+                self.mark_success(start)
+                user_label = f"@{user.username}" if user.username else f"ID {user.telegram_id}"
+                return True, f"User {user_label} berhasil disetujui (Approved).", target_tg_id
+
+        except Exception as e:
+            self.mark_failure(start, e)
+            logger.error(f"[{self.agent_name}] Error approving user {identifier}: {e}")
+            return False, f"Gagal menyetujui user: {str(e)}", None
+
+    async def reject_user(self, identifier: Any) -> Tuple[bool, str, Optional[int]]:
+        """Reject or suspend a user."""
+        start = self.mark_start()
+        try:
+            async with async_session_maker() as session:
+                target = str(identifier).strip().lstrip("@")
+                stmt = select(UserWhitelist)
+
+                if target.isdigit():
+                    num_val = int(target)
+                    stmt = stmt.where(or_(UserWhitelist.id == num_val, UserWhitelist.telegram_id == num_val))
+                else:
+                    stmt = stmt.where(func.lower(UserWhitelist.username) == target.lower())
+
+                res = await session.execute(stmt)
+                user = res.scalar_one_or_none()
+
+                if not user:
+                    self.mark_failure(start, ValueError("User not found"))
+                    return False, f"User '{identifier}' tidak ditemukan.", None
+
+                user.status = "rejected"
+                user.is_active = False
+                user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                await session.commit()
+
+                self.mark_success(start)
+                user_label = f"@{user.username}" if user.username else f"ID {user.telegram_id}"
+                return True, f"User {user_label} berhasil ditolak (Rejected).", user.telegram_id
+
+        except Exception as e:
+            self.mark_failure(start, e)
+            logger.error(f"[{self.agent_name}] Error rejecting user {identifier}: {e}")
+            return False, f"Gagal menolak user: {str(e)}", None
+
     async def add_to_whitelist(self, identifier: str, notes: Optional[str] = None) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
-        """Add user to whitelist. Supports username (e.g. @johndoe or johndoe) OR telegram user_id (e.g. 123456789).
-        Mandatory requirement: MUST support both username and user ID!
-        """
+        """Manually add or activate a user to whitelist with immediate approval."""
         start = self.mark_start()
         try:
             identifier_str = str(identifier).strip()
@@ -73,14 +210,12 @@ class AccessControlAgent(BaseAgent):
             telegram_id: Optional[int] = None
             username: Optional[str] = None
 
-            # Detect if input is pure numeric (User ID) or text (Username)
             if re.fullmatch(r"^\d+$", identifier_str):
                 telegram_id = int(identifier_str)
             else:
                 username = identifier_str.lstrip("@").strip()
 
             async with async_session_maker() as session:
-                # Check for existing record
                 stmt = select(UserWhitelist)
                 if telegram_id is not None:
                     stmt = stmt.where(UserWhitelist.telegram_id == telegram_id)
@@ -92,6 +227,7 @@ class AccessControlAgent(BaseAgent):
 
                 if existing:
                     existing.is_active = True
+                    existing.status = "approved"
                     if notes:
                         existing.notes = notes
                     existing.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -101,6 +237,7 @@ class AccessControlAgent(BaseAgent):
                         "id": existing.id,
                         "telegram_id": existing.telegram_id,
                         "username": existing.username,
+                        "status": existing.status,
                         "notes": existing.notes,
                         "is_active": existing.is_active
                     }
@@ -109,6 +246,8 @@ class AccessControlAgent(BaseAgent):
                     telegram_id=telegram_id,
                     username=username,
                     notes=notes or "Added via Admin Dashboard",
+                    status="approved",
+                    source="admin_manual",
                     is_active=True
                 )
                 session.add(new_user)
@@ -119,6 +258,7 @@ class AccessControlAgent(BaseAgent):
                     "id": new_user.id,
                     "telegram_id": new_user.telegram_id,
                     "username": new_user.username,
+                    "status": new_user.status,
                     "notes": new_user.notes,
                     "is_active": new_user.is_active
                 }
@@ -128,7 +268,7 @@ class AccessControlAgent(BaseAgent):
             return False, f"Failed to add user to whitelist: {str(e)}", None
 
     async def list_whitelisted_users(self) -> List[Dict[str, Any]]:
-        """List all whitelisted users for admin dashboard."""
+        """List all users for admin dashboard and bot."""
         start = self.mark_start()
         try:
             async with async_session_maker() as session:
@@ -140,7 +280,10 @@ class AccessControlAgent(BaseAgent):
                         "id": u.id,
                         "telegram_id": u.telegram_id,
                         "username": u.username,
+                        "email": u.email,
                         "notes": u.notes,
+                        "status": getattr(u, "status", "approved"),
+                        "source": getattr(u, "source", "telegram"),
                         "is_active": u.is_active,
                         "created_at": u.created_at.strftime("%Y-%m-%d %H:%M:%S") if u.created_at else "",
                         "updated_at": u.updated_at.strftime("%Y-%m-%d %H:%M:%S") if u.updated_at else ""
@@ -153,6 +296,11 @@ class AccessControlAgent(BaseAgent):
             self.mark_failure(start, e)
             return []
 
+    async def list_pending_users(self) -> List[Dict[str, Any]]:
+        """List users specifically awaiting admin approval."""
+        all_users = await self.list_whitelisted_users()
+        return [u for u in all_users if u.get("status") == "pending"]
+
     async def toggle_status(self, whitelist_id: int) -> Tuple[bool, str]:
         """Toggle active/suspended status for a whitelisted user."""
         start = self.mark_start()
@@ -164,9 +312,13 @@ class AccessControlAgent(BaseAgent):
                 if not user:
                     return False, "User not found."
                 user.is_active = not user.is_active
+                if user.is_active:
+                    user.status = "approved"
+                else:
+                    user.status = "rejected"
                 user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
                 await session.commit()
-                status_str = "Active" if user.is_active else "Suspended"
+                status_str = "Approved / Active" if user.is_active else "Suspended / Rejected"
                 self.mark_success(start)
                 return True, f"Status updated to {status_str}."
         except Exception as e:

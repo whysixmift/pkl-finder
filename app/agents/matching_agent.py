@@ -19,7 +19,7 @@ class MatchingAgent(BaseAgent):
             feature_description="Semantic AI Job Matcher & Scoring Engine (OpenRouter + Regex Fallback)"
         )
 
-    async def match_jobs_for_users(self, jobs: List[Job]) -> List[Tuple[int, Job]]:
+    async def match_jobs_for_users(self, jobs: List[Job], target_user_id: Optional[int] = None) -> List[Tuple[int, Job]]:
         """Evaluate a list of jobs against all registered user CVs, persisting AIScore records."""
         start = self.mark_start()
         recommendations: List[Tuple[int, Job]] = []
@@ -30,15 +30,18 @@ class MatchingAgent(BaseAgent):
 
         try:
             async with async_session_maker() as session:
-                # Fetch all user CV profiles
-                stmt = select(CVProfile)
+                # Fetch user CV profiles
+                if target_user_id:
+                    stmt = select(CVProfile).where(CVProfile.user_id == target_user_id)
+                else:
+                    stmt = select(CVProfile)
                 res = await session.execute(stmt)
                 cv_profiles: List[CVProfile] = list(res.scalars().all())
 
                 if not cv_profiles:
                     # Fallback to Admin profile
                     default_cv_text = "SMK Negeri 2 Bekasi Software Engineering. Python, C++, Embedded Systems, IoT, Robotics."
-                    cv_profiles = [CVProfile(user_id=settings.TELEGRAM_ADMIN_ID, filename="default", cv_text=default_cv_text)]
+                    cv_profiles = [CVProfile(user_id=target_user_id or settings.TELEGRAM_ADMIN_ID, filename="default", cv_text=default_cv_text)]
 
                 for cv_profile in cv_profiles:
                     uid = cv_profile.user_id

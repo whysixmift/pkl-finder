@@ -41,3 +41,7 @@ class BaseLLMProvider(ABC):
     ) -> Tuple[str, str]:
         """Generate a personalized cover application email tailored to CV and company."""
         pass
+
+    async def analyze_cv_intelligence(self, cv_text: str) -> dict:
+        """Analyze candidate CV to detect suitable job roles, top skills, and scraper search queries."""
+        return {}

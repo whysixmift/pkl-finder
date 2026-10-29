@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     # Telegram Bot Settings
     TELEGRAM_BOT_TOKEN: str = "mock_token"
+    ADMIN_BOT_TOKEN: str = ""
     TELEGRAM_ADMIN_ID: int = 0
 
     # Database

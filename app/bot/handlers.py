@@ -134,7 +134,7 @@ def format_job_message(job: Job, user_id: int) -> str:
     )
 
 def get_job_keyboard(job: Job, is_fav: bool = False) -> InlineKeyboardMarkup:
-    """Create inline keyboard with actions (Favorite toggle + View link)."""
+    """Create inline keyboard with actions (Favorite toggle + View link + Apply Cold Email)."""
     fav_text = "❤️ Hapus Favorit" if is_fav else "⭐ Favoritkan"
     fav_callback = f"unfav:{job.id}" if is_fav else f"fav:{job.id}"
     
@@ -142,6 +142,9 @@ def get_job_keyboard(job: Job, is_fav: bool = False) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(fav_text, callback_data=fav_callback),
             InlineKeyboardButton("🔗 Buka Lowongan", url=job.url)
+        ],
+        [
+            InlineKeyboardButton("✉️ Lamar Cepat (Auto Cold Email + CV)", callback_data=f"apply_email:{job.id}")
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -153,29 +156,85 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_id = update.effective_user.id
     username = update.effective_user.username
     from app.agents.access_control_agent import access_control_agent
+    
+    # Auto-register user as pending if new
+    _, is_new = await access_control_agent.get_or_create_pending_user(
+        user_id=user_id,
+        username=username,
+        source="telegram"
+    )
     is_allowed = await access_control_agent.is_allowed(user_id, username)
+    context.user_data["state"] = "AWAITING_CV"
 
     if not is_allowed:
         user_display = f"@{username}" if username else f"ID: {user_id}"
         restricted_text = (
-            "🔒 <b>Selamat Datang di PKL Finder SaaS!</b>\n\n"
-            f"Akun Anda (<code>{user_display}</code>) saat ini belum terdaftar di <b>whitelist</b>.\n\n"
-            "📋 <b>Informasi Akun Anda:</b>\n"
-            f"• Telegram User ID: <code>{user_id}</code>\n"
-            f"• Username: <code>@{username or 'Tidak ada'}</code>\n\n"
-            "👉 <i>Kirimkan ID atau Username di atas ke Administrator untuk membuka akses penuh ke bot ini.</i>"
+            "👋 <b>Selamat Datang di GetAJob / PKL Finder AI!</b>\n\n"
+            f"Akun Anda (<code>{user_display}</code>) telah terdaftar dan saat ini sedang dalam <b>antrean verifikasi Admin</b>.\n\n"
+            "📄 <b>Langkah Wajib: Upload CV Anda Sekarang!</b>\n"
+            "Kirimkan file CV Anda (format <b>.PDF</b> atau <b>.DOCX</b>) langsung ke chat ini.\n\n"
+            "🧠 <b>Fitur Analisis Karir AI:</b>\n"
+            "• AI akan mendeteksi keahlian & spesialisasi Anda secara mendalam.\n"
+            "• Mendeteksi pekerjaan & posisi apa saja yang paling cocok buat Anda (Full-Time, Contract, Remote, Magang).\n"
+            "• Menyiapkan keyword pencarian personal khusus profil Anda!\n\n"
+            "👉 <i>Silakan langsung kirimkan file CV (.pdf/.docx) Anda sekarang!</i>"
         )
         await update.message.reply_text(restricted_text, parse_mode="HTML")
         return
 
-    welcome_text = (
-        "🤖 <b>PKL Finder - Multi-Tenant AI Assistant</b>\n\n"
-        "Asisten AI otonom untuk pencarian lowongan magang/PKL, crawler perusahaan, "
-        "kolektor email rekrutmen, dan auto-dispatcher email dengan Google SSO & SMTP.\n\n"
-        "Status: 🟢 <b>Akses SaaS Terverifikasi</b>\n\n"
-        "Kirim /help untuk melihat semua daftar perintah yang tersedia."
-    )
-    await update.message.reply_text(welcome_text, parse_mode="HTML")
+    # User is approved / Admin
+    async with async_session_maker() as session:
+        user_cv = await cv_service.get_active_cv_profile(session, user_id)
+
+    if not user_cv:
+        approved_text = (
+            "🤖 <b>GetAJob / PKL Finder - AI Career Assistant</b>\n\n"
+            "Status: 🟢 <b>Akses SaaS Terverifikasi</b>\n\n"
+            "📄 <b>Langkah 1: Silakan Upload CV Anda!</b>\n"
+            "Kirimkan file CV Anda (format <b>.PDF</b> atau <b>.DOCX</b>) langsung ke chat ini.\n"
+            "AI kami akan otomatis membedah keahlian dan pekerjaan yang paling cocok buat Anda!"
+        )
+        await update.message.reply_text(approved_text, parse_mode="HTML")
+    else:
+        import json
+        roles = []
+        skills = []
+        keywords = []
+        if user_cv.detected_roles:
+            try:
+                roles = json.loads(user_cv.detected_roles)
+            except Exception:
+                roles = []
+        if user_cv.detected_skills:
+            try:
+                skills = json.loads(user_cv.detected_skills)
+            except Exception:
+                skills = []
+        if user_cv.search_keywords:
+            try:
+                keywords = json.loads(user_cv.search_keywords)
+            except Exception:
+                keywords = []
+
+        roles_list = "\n".join([f"  {i}. <b>{r}</b>" for i, r in enumerate(roles[:4], 1)]) if roles else "  • Software Engineer / Tech"
+        skills_str = ", ".join(skills[:6]) if skills else "Programming, Technical Skills"
+        kws_str = ", ".join(keywords[:5]) if keywords else "software engineer, developer"
+
+        welcome_text = (
+            "🤖 <b>GetAJob / PKL Finder - AI Career Assistant</b>\n\n"
+            "Status: 🟢 <b>Akses SaaS Terverifikasi</b>\n"
+            f"📄 CV Aktif: <code>{user_cv.filename}</code>\n\n"
+            f"🎯 <b>Pekerjaan yang Cocok untuk Anda:</b>\n"
+            f"{roles_list}\n\n"
+            f"💡 <b>Keahlian Terdeteksi:</b>\n• {skills_str}\n\n"
+            f"🔍 <b>Keyword Pencarian Terpersonalisasi:</b>\n<code>{kws_str}</code>\n\n"
+            "👉 <i>Kirim /search atau klik tombol di bawah untuk mulai scraping lowongan kerja cocok:</i>"
+        )
+        keyboard = [
+            [InlineKeyboardButton("🚀 Cari Lowongan Kerja Sekarang", callback_data="btn_search")],
+            [InlineKeyboardButton("🔄 Unggah CV Baru", callback_data="btn_uploadcv")]
+        ]
+        await update.message.reply_text(welcome_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 @error_boundary
 @whitelist_required
@@ -223,28 +282,75 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 @whitelist_required
 async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
-    await update.message.reply_text("🔍 <i>Memulai scraping dan matching AI...</i>", parse_mode="HTML")
-    new_jobs = await job_service.run_scraping_and_matching()
-    
-    # Run the company discovery and career crawling engine globally
-    await update.message.reply_text("🏢 <i>Menjalankan Crawler Perusahaan & Harvester Email...</i>", parse_mode="HTML")
+    target_msg = update.effective_message
+
+    # Check CV
+    async with async_session_maker() as session:
+        user_cv = await cv_service.get_active_cv_profile(session, user_id)
+
+    if not user_cv:
+        await target_msg.reply_text(
+            "⚠️ <b>Anda belum mengunggah CV!</b>\n\n"
+            "Silakan kirim file CV Anda (.PDF atau .DOCX) terlebih dahulu agar AI kami tahu pekerjaan apa yang cocok untuk Anda.",
+            parse_mode="HTML"
+        )
+        context.user_data["state"] = "AWAITING_CV"
+        return
+
+    import json
+    roles = []
+    if user_cv.detected_roles:
+        try:
+            roles = json.loads(user_cv.detected_roles)
+        except Exception:
+            roles = []
+    roles_str = ", ".join(roles[:3]) if roles else "Tech & Software"
+
+    wait_msg = await target_msg.reply_text(
+        f"🔍 <b>Memulai Pencarian Kerja Terpersonalisasi...</b>\n\n"
+        f"🎯 <b>Target Posisi:</b> {roles_str}\n"
+        "⚡ <i>Menjalankan scraping di Glints, LinkedIn, Indeed, JobStreet, Kalibrr, dan Google Jobs...</i>",
+        parse_mode="HTML"
+    )
+
+    new_jobs = await job_service.run_scraping_and_matching(target_user_id=user_id)
+
+    # Run company discovery in background
     try:
-        await discovery_engine.discover_companies()
-        await career_crawler.crawl_all_companies()
+        import asyncio
+        asyncio.create_task(discovery_engine.discover_companies())
     except Exception as ce:
-        logger.error(f"Error during company crawling: {ce}")
+        logger.error(f"Error starting background company discovery: {ce}")
 
     # Extract jobs recommended specifically for this user
     user_recs = [job for uid, job in new_jobs if uid == user_id]
 
     if user_recs:
-        await update.message.reply_text(f"✅ Scraping selesai! Menemukan {len(user_recs)} lowongan baru rekomendasi untuk CV Anda.")
+        await wait_msg.edit_text(
+            f"✅ <b>Scraping Selesai!</b> Menemukan <b>{len(user_recs)}</b> lowongan kerja rekomendasi yang cocok untuk profil Anda.",
+            parse_mode="HTML"
+        )
         for job in user_recs:
             text = format_job_message(job, user_id)
             keyboard = get_job_keyboard(job, is_fav=False)
-            await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
+            await target_msg.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
     else:
-        await update.message.reply_text("✅ Scraping selesai! Tidak ada lowongan baru yang direkomendasikan saat ini.")
+        # Check existing latest jobs in DB for user
+        existing_recs = await job_service.get_latest_jobs(user_id=user_id, limit=5, recommended_only=True)
+        if existing_recs:
+            await wait_msg.edit_text(
+                f"✅ <b>Scraping Selesai!</b> Menampilkan <b>{len(existing_recs)}</b> lowongan kerja rekomendasi terbaik untuk profil Anda:",
+                parse_mode="HTML"
+            )
+            for job in existing_recs:
+                text = format_job_message(job, user_id)
+                keyboard = get_job_keyboard(job, is_fav=False)
+                await target_msg.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
+        else:
+            await wait_msg.edit_text(
+                "✅ <b>Scraping Selesai!</b> Belum ada lowongan baru dengan skor kecocokan tinggi saat ini. Coba perbarui CV atau coba kembali dalam beberapa saat.",
+                parse_mode="HTML"
+            )
 
 @error_boundary
 @whitelist_required
@@ -760,33 +866,25 @@ async def openapplications_handler(update: Update, context: ContextTypes.DEFAULT
 # ----------------- GENERIC DOCUMENT / TEXT INPUTS -----------------
 
 async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Processes PDF/Word doc uploads based on user state."""
-    state = context.user_data.get("state")
-    if not state or state not in ["AWAITING_CV", "AWAITING_PORTFOLIO"]:
+    """Processes PDF/Word doc uploads automatically, detecting suitable career roles via AI."""
+    doc = update.message.document
+    if not doc or not doc.file_name:
         return
 
-    doc = update.message.document
-    file_info = await doc.get_file()
-    file_bytes = await file_info.download_as_bytearray()
+    file_name = doc.file_name.lower()
+    state = context.user_data.get("state")
     user_id = update.effective_user.id
 
-    async with async_session_maker() as session:
-        if state == "AWAITING_CV":
-            try:
-                await cv_service.save_cv(session, user_id, doc.file_name, bytes(file_bytes))
-                await update.message.reply_text("✅ <b>CV Berhasil Diunggah!</b> Teks berhasil diekstrak untuk pencocokan AI.", parse_mode="HTML")
-            except Exception as e:
-                await update.message.reply_text(f"❌ Gagal memproses CV: {e}")
-            finally:
-                context.user_data["state"] = None
-                
-        elif state == "AWAITING_PORTFOLIO":
-            os.makedirs("data/portfolios", exist_ok=True)
-            local_path = os.path.join("data/portfolios", doc.file_name)
-            with open(local_path, "wb") as f:
-                f.write(bytes(file_bytes))
-                
-            # Check if portfolio already exists for user to avoid unique key violation
+    # If user explicitly awaiting portfolio upload
+    if state == "AWAITING_PORTFOLIO":
+        file_info = await doc.get_file()
+        file_bytes = await file_info.download_as_bytearray()
+        os.makedirs("data/portfolios", exist_ok=True)
+        local_path = os.path.join("data/portfolios", doc.file_name)
+        with open(local_path, "wb") as f:
+            f.write(bytes(file_bytes))
+            
+        async with async_session_maker() as session:
             stmt = select(Portfolio).where(Portfolio.user_id == user_id)
             res = await session.execute(stmt)
             portfolio = res.scalar_one_or_none()
@@ -798,8 +896,83 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 session.add(portfolio)
             await session.commit()
             
-            await update.message.reply_text("✅ <b>File Portfolio Berhasil Diunggah!</b>", parse_mode="HTML")
-            context.user_data["state"] = None
+        await update.message.reply_text("✅ <b>File Portfolio Berhasil Diunggah!</b>", parse_mode="HTML")
+        context.user_data["state"] = None
+        return
+
+    # Check file extension for CV (.pdf or .docx)
+    if not (file_name.endswith(".pdf") or file_name.endswith(".docx")):
+        await update.message.reply_text("⚠️ Harap unggah file CV dengan format <b>.PDF</b> atau <b>.DOCX</b>.", parse_mode="HTML")
+        return
+
+    wait_msg = await update.message.reply_text(
+        "📄 <i>Membaca CV dan menjalankan analisis AI untuk mendeteksi keahlian & posisi pekerjaan yang cocok...</i>",
+        parse_mode="HTML"
+    )
+
+    try:
+        file_info = await doc.get_file()
+        file_bytes = await file_info.download_as_bytearray()
+
+        async with async_session_maker() as session:
+            cv_profile = await cv_service.save_cv(session, user_id, doc.file_name, bytes(file_bytes))
+
+        import json
+        roles = []
+        skills = []
+        keywords = []
+        if cv_profile.detected_roles:
+            try:
+                roles = json.loads(cv_profile.detected_roles)
+            except Exception:
+                roles = []
+        if cv_profile.detected_skills:
+            try:
+                skills = json.loads(cv_profile.detected_skills)
+            except Exception:
+                skills = []
+        if cv_profile.search_keywords:
+            try:
+                keywords = json.loads(cv_profile.search_keywords)
+            except Exception:
+                keywords = []
+
+        summary = cv_profile.candidate_summary or "Profil CV berhasil dipelajari oleh AI."
+        roles_list = "\n".join([f"  {i}. <b>{r}</b>" for i, r in enumerate(roles[:4], 1)]) if roles else "  • Software Engineer / Tech"
+        skills_str = ", ".join(skills[:6]) if skills else "Programming, Technical Skills"
+        kws_str = ", ".join(keywords[:5]) if keywords else "software engineer, developer"
+
+        result_text = (
+            "🎉 <b>CV Berhasil Dianalisis oleh AI!</b>\n\n"
+            f"👤 <b>Ringkasan Profil:</b>\n<i>\"{summary}\"</i>\n\n"
+            f"🎯 <b>Pekerjaan / Posisi yang Cocok untuk Anda:</b>\n"
+            f"{roles_list}\n\n"
+            f"💡 <b>Keahlian Terdeteksi:</b>\n• {skills_str}\n\n"
+            f"🔍 <b>Keyword Pencarian Terpersonalisasi:</b>\n<code>{kws_str}</code>\n\n"
+            "👉 <i>Klik tombol di bawah untuk langsung mencari lowongan kerja yang cocok:</i>"
+        )
+        keyboard = [
+            [InlineKeyboardButton("🚀 Cari Lowongan Kerja Sekarang", callback_data="btn_search")],
+            [InlineKeyboardButton("👤 Lihat Profil Lengkap", callback_data="btn_profile")]
+        ]
+        await wait_msg.edit_text(result_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        context.user_data["state"] = None
+
+        # Notify admin of CV upload
+        roles_preview = ", ".join(roles[:3]) if roles else "Tech"
+        from app.services.admin_notifier import notify_admin_new_user
+        asyncio.create_task(
+            notify_admin_new_user(
+                user_id=user_id,
+                username=update.effective_user.username,
+                source="telegram",
+                details=f"File CV: {doc.file_name} | Posisi: {roles_preview}"
+            )
+        )
+
+    except Exception as e:
+        logger.error(f"Error handling CV document upload: {e}", exc_info=True)
+        await wait_msg.edit_text(f"❌ <b>Gagal memproses CV:</b> <code>{str(e)}</code>", parse_mode="HTML")
 
 async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """State machine processing for text setup replies."""
@@ -938,13 +1111,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     data = query.data
     user_id = query.from_user.id
+
+    if data == "btn_search":
+        await query.answer()
+        await search_handler(update, context)
+        return
+    elif data == "btn_uploadcv":
+        await query.answer()
+        context.user_data["state"] = "AWAITING_CV"
+        await query.message.reply_text("📄 <b>Silakan kirimkan file CV (.PDF atau .DOCX) Anda sekarang:</b>", parse_mode="HTML")
+        return
+    elif data == "btn_profile":
+        await query.answer()
+        await profile_handler(update, context)
+        return
     
     try:
-        action, entity_id_str = data.split(":")
+        action, entity_id_str = data.split(":", 1)
         entity_id = int(entity_id_str)
         
         async with async_session_maker() as session:
-            if action in ["fav", "unfav"]:
+            if action in ["fav", "unfav", "apply_email"]:
                 stmt = select(Job).options(selectinload(Job.ai_scores)).where(Job.id == entity_id)
                 res = await session.execute(stmt)
                 job = res.scalar_one_or_none()
@@ -959,6 +1146,46 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     success = await job_service.remove_favorite(user_id, entity_id)
                     if success:
                         await query.edit_message_reply_markup(reply_markup=get_job_keyboard(job, is_fav=False))
+                elif action == "apply_email":
+                    await query.answer("Menyiapkan draft lamaran...")
+                    wait_draft = await query.message.reply_text("✍️ <i>Menyusun draft lamaran personal & melampirkan CV Anda...</i>", parse_mode="HTML")
+                    try:
+                        from app.agents.email_drafting_agent import email_drafting_agent
+                        draft = await email_drafting_agent.draft_email_for_job(
+                            session=session,
+                            user_id=user_id,
+                            company_id=job.company_id,
+                            job_id=entity_id
+                        )
+                        if draft:
+                            await wait_draft.edit_text(
+                                f"✅ <b>Draft Lamaran Email Berhasil Dibuat!</b>\n\n"
+                                f"🏢 <b>Tujuan:</b> <code>{draft.recipient_email}</code>\n"
+                                f"📌 <b>Subjek:</b> <b>{draft.subject}</b>\n\n"
+                                f"📄 <b>Preview Body:</b>\n<i>{draft.body[:280]}...</i>\n\n"
+                                f"📎 <b>Lampiran:</b> {'CV Kandidat (.pdf)' if draft.attachments else 'Tidak ada'}\n\n"
+                                "Gunakan perintah /queue untuk meninjau dan mengirim email ini menggunakan Google SSO atau SMTP.",
+                                parse_mode="HTML"
+                            )
+                        else:
+                            await wait_draft.edit_text("❌ Gagal menyusun draft lamaran untuk lowongan ini.")
+                    except Exception as de:
+                        logger.error(f"Error drafting email from job card: {de}")
+                        await wait_draft.edit_text(f"❌ Error membuat draft: {de}")
+
+            elif action == "adm_approve":
+                from app.agents.access_control_agent import access_control_agent
+                success, msg, _ = await access_control_agent.approve_user(entity_id)
+                await query.answer("User disetujui!" if success else "Gagal")
+                await query.edit_message_text(f"{query.message.text_html}\n\n<b>Status:</b> ✅ {msg}", parse_mode="HTML")
+                return
+
+            elif action == "adm_reject":
+                from app.agents.access_control_agent import access_control_agent
+                success, msg, _ = await access_control_agent.reject_user(entity_id)
+                await query.answer("User ditolak!" if success else "Gagal")
+                await query.edit_message_text(f"{query.message.text_html}\n\n<b>Status:</b> ⛔ {msg}", parse_mode="HTML")
+                return
 
             elif action == "approve":
                 email_stmt = select(EmailQueue).where((EmailQueue.id == entity_id) & (EmailQueue.user_id == user_id))

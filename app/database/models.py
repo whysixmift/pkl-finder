@@ -140,6 +140,10 @@ class CVProfile(Base):
     filename: Mapped[str] = mapped_column(String(255))
     file_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     cv_text: Mapped[str] = mapped_column(Text)
+    detected_roles: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    detected_skills: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    search_keywords: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    candidate_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
@@ -215,7 +219,10 @@ class UserWhitelist(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     telegram_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, unique=True, index=True)
     username: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, unique=True, index=True)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="approved", server_default="approved")
+    source: Mapped[str] = mapped_column(String(50), default="telegram", server_default="telegram")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)

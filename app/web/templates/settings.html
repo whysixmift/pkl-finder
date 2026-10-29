@@ -65,15 +65,28 @@
                     </div>
                 </div>
 
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div class="space-y-1.5">
                         <label class="text-xs font-medium text-gray-300 flex items-center justify-between">
                             <span>TELEGRAM_BOT_TOKEN <span class="text-red-400">*</span></span>
-                            <span class="text-[10px] text-gray-500 font-mono">wajib</span>
+                            <span class="text-[10px] text-gray-500 font-mono">User Bot</span>
                         </label>
                         <div class="relative">
                             <input type="password" id="field_bot_token" name="telegram_bot_token" value="{{ env_dict.TELEGRAM_BOT_TOKEN }}" required class="w-full px-3.5 py-2.5 pr-10 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors">
                             <button type="button" onclick="toggleVisibility('field_bot_token', this)" class="absolute right-3 top-2.5 text-gray-400 hover:text-white">
+                                <i class="fa-solid fa-eye text-xs"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <label class="text-xs font-medium text-gray-300 flex items-center justify-between">
+                            <span>ADMIN_BOT_TOKEN</span>
+                            <span class="text-[10px] text-emerald-400 font-mono">Admin Bot</span>
+                        </label>
+                        <div class="relative">
+                            <input type="password" id="field_admin_bot_token" name="admin_bot_token" value="{{ env_dict.ADMIN_BOT_TOKEN or '' }}" class="w-full px-3.5 py-2.5 pr-10 rounded-xl bg-gray-900/90 border border-gray-700 text-sm font-mono text-white focus:outline-none focus:border-brand-500 transition-colors" placeholder="BotFather Token">
+                            <button type="button" onclick="toggleVisibility('field_admin_bot_token', this)" class="absolute right-3 top-2.5 text-gray-400 hover:text-white">
                                 <i class="fa-solid fa-eye text-xs"></i>
                             </button>
                         </div>

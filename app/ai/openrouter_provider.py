@@ -10,17 +10,17 @@ from app.utils.logger import logger
 
 # Base System Prompt
 SYSTEM_PROMPT = """
-You are an expert AI recruiter matching internship/PKL jobs for Indonesian high school (SMK) / university students.
+You are an expert AI talent recruiter and career matching engine for Indonesian and global tech opportunities.
 Your task is to analyze the job posting and evaluate its suitability against the Candidate Profile below:
 
 Candidate Details:
 {cv_text}
 
 Evaluation Criteria:
-1. Role Match: Does the job fit the preferred roles?
-2. Location Match: Is it in the candidate's preferred location or Remote?
-3. Type Match: Is it explicitly a "PKL", "Internship", "Magang", or suitable for a student?
-4. Skill Match: How many of the candidate's skills match?
+1. Role Match: Does the job title, responsibilities, and experience level match what fits the candidate?
+2. Technical & Practical Skills: How well do candidate's skills match the required technologies?
+3. Opportunity Scope: Evaluate matches fairly across Full-Time, Contract, Remote, Fresh Graduate, and Internship/Magang roles depending on candidate's background.
+4. Location & Work Mode: Is it in candidate's preferred location, easily accessible, Hybrid, or Remote?
 
 You MUST return a JSON response with the following exact structure:
 {{
@@ -29,15 +29,39 @@ You MUST return a JSON response with the following exact structure:
   "reason": ["reason 1", "reason 2"],
   "matched_skills": ["skill 1", "skill 2"],
   "missing_skills": ["skill 3", "skill 4"],
-  "summary": "A concise summary of why this job fits or why it doesn't.",
-  "company_category": "Embedded Systems" or "Software House" or "Robotics" or "IoT" or "General Tech",
+  "summary": "A concise summary in Indonesian of why this job fits or why it doesn't.",
+  "company_category": "Software House" or "IoT/Hardware" or "Robotics" or "Fintech" or "General Tech",
   "work_mode": "Remote" or "Hybrid" or "On-site",
   "priority": "low" or "medium" or "high"
 }}
 
 Response instructions:
 - Output ONLY the JSON block. Do not include any explanation outside the JSON.
-- If it is not an internship/magang/PKL (e.g. it is a mid-senior level full-time job), score it below 50 and set recommended to false.
+- If the job substantially aligns with candidate's capabilities and interests, score 70-100 and set recommended: true.
+- If the role requires senior/lead level far above candidate or is completely unrelated, score below 50 and set recommended: false.
+"""
+
+CV_ANALYSIS_PROMPT = """
+You are an expert AI Career Profiler and Technical Talent Advisor.
+Analyze the candidate's CV text below and detect their skills, suitable job roles, and optimal search keywords for job hunting portals (Glints, LinkedIn, Indeed, JobStreet, Kalibrr).
+
+Candidate CV:
+{cv_text}
+
+You MUST return a JSON object with this exact structure:
+{{
+  "candidate_name": "Full name or Identified Candidate",
+  "specialization": "Primary field (e.g., Software Engineering, Embedded Systems, Backend, Data)",
+  "experience_level": "Entry-Level / Fresh Graduate / Junior / Mid-Level",
+  "top_skills": ["Skill 1", "Skill 2", "Skill 3", "Skill 4", "Skill 5"],
+  "recommended_roles": ["Job Title 1", "Job Title 2", "Job Title 3", "Job Title 4"],
+  "search_keywords": ["search keyword 1", "search keyword 2", "search keyword 3"],
+  "preferred_work_modes": ["Remote", "Hybrid", "On-site"],
+  "summary": "2-3 sentences in Indonesian summarizing the candidate's core strengths and ideal career direction."
+}}
+
+Response instructions:
+- Output ONLY the JSON block. Do not include markdown codeblocks or explanations outside the JSON.
 """
 
 
@@ -278,6 +302,89 @@ class OpenRouterProvider(BaseLLMProvider):
         )
         return fallback_subject, fallback_body
 
+    async def analyze_cv_intelligence(self, cv_text: str) -> Dict[str, Any]:
+        """Analyze candidate CV to detect suitable job roles, top skills, and scraper search queries."""
+        sys_prompt = CV_ANALYSIS_PROMPT.format(cv_text=cv_text)
+
+        def payload_factory(model_id: str) -> Dict[str, Any]:
+            return {
+                "model": model_id,
+                "messages": [
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": "Analyze the CV and provide the career intelligence JSON."}
+                ],
+                "response_format": {"type": "json_object"},
+                "stream": False
+            }
+
+        try:
+            data = await self._post_with_fallback(payload_factory)
+            content = data["choices"][0]["message"]["content"].strip()
+            if content.startswith("```"):
+                match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", content)
+                if match:
+                    content = match.group(1)
+
+            parsed = json.loads(content)
+            return {
+                "candidate_name": parsed.get("candidate_name", "Kandidat Job Finder"),
+                "specialization": parsed.get("specialization", "Software Engineering / Tech"),
+                "experience_level": parsed.get("experience_level", "Junior / Entry-Level"),
+                "top_skills": parsed.get("top_skills", ["Python", "Backend", "Git"]),
+                "recommended_roles": parsed.get("recommended_roles", ["Software Engineer", "Backend Developer"]),
+                "search_keywords": parsed.get("search_keywords", ["software engineer", "backend developer"]),
+                "preferred_work_modes": parsed.get("preferred_work_modes", ["Remote", "Hybrid", "On-site"]),
+                "summary": parsed.get("summary", "Profil teknis yang solid dengan keahlian pengembangan aplikasi.")
+            }
+        except Exception as e:
+            logger.warning(f"AI CV analysis failed ({e}), falling back to heuristic parsing.")
+            return self._fallback_analyze_cv(cv_text)
+
+    def _fallback_analyze_cv(self, cv_text: str) -> Dict[str, Any]:
+        """Deterministic heuristic analysis of CV text when LLM is unavailable."""
+        text_lower = cv_text.lower()
+        skills = []
+        skill_map = {
+            "Python": ["python", "django", "flask", "fastapi"],
+            "JavaScript / TypeScript": ["javascript", "typescript", "node", "react", "vue"],
+            "Backend Engineering": ["backend", "api", "rest", "sql", "postgres", "mysql"],
+            "Embedded Systems & IoT": ["embedded", "iot", "arduino", "esp32", "stm32", "microcontroller", "robotics"],
+            "Linux & DevOps": ["linux", "docker", "git", "ci/cd", "bash"],
+            "Mobile Development": ["flutter", "kotlin", "android", "swift", "react native"],
+            "UI/UX & Frontend": ["html", "css", "tailwind", "figma", "frontend"],
+            "Data Science & AI": ["machine learning", "data science", "pandas", "pytorch", "tensorflow"]
+        }
+
+        roles = []
+        keywords = []
+        for category, kws in skill_map.items():
+            if any(k in text_lower for k in kws):
+                skills.append(category)
+
+        if "Python" in skills or "Backend Engineering" in skills:
+            roles.extend(["Python Developer", "Backend Engineer", "Junior Software Engineer"])
+            keywords.extend(["python developer", "backend engineer", "software engineer"])
+        if "Embedded Systems & IoT" in skills:
+            roles.extend(["IoT Engineer", "Embedded Software Developer", "Hardware Firmware Engineer"])
+            keywords.extend(["iot engineer", "embedded engineer", "firmware developer"])
+        if "JavaScript / TypeScript" in skills or "UI/UX & Frontend" in skills:
+            roles.extend(["Frontend Developer", "Full Stack Developer"])
+            keywords.extend(["frontend developer", "full stack developer"])
+        if not roles:
+            roles = ["Software Engineer", "IT Technical Support", "Junior Developer"]
+            keywords = ["software engineer", "junior developer", "it programmer"]
+
+        return {
+            "candidate_name": "Kandidat Job Finder",
+            "specialization": skills[0] if skills else "Software Engineering",
+            "experience_level": "Entry-Level / Junior Developer",
+            "top_skills": skills[:5] if skills else ["Programming", "Problem Solving", "Git"],
+            "recommended_roles": list(dict.fromkeys(roles))[:4],
+            "search_keywords": list(dict.fromkeys(keywords))[:4],
+            "preferred_work_modes": ["Remote", "Hybrid", "On-site"],
+            "summary": f"Kandidat memiliki keahlian utama di bidang {', '.join(skills[:3]) if skills else 'teknologi software'}."
+        }
+
     def _parse_ai_response(self, content: str) -> AIResult:
         """Ensure the LLM response adheres to the strict Pydantic output schema."""
         try:
@@ -353,23 +460,31 @@ class OpenRouterProvider(BaseLLMProvider):
         score = 0
         reasons = []
         if is_intern:
-            score += 45
-            reasons.append("Identified as internship/magang/PKL.")
-        if is_senior:
-            reasons.append("Senior or management role. Not suitable for student.")
+            score += 25
+            reasons.append("Identified as entry/internship friendly.")
+        elif any(kw in title_lower for kw in ["junior", "associate", "developer", "engineer", "programmer"]):
+            score += 35
+            reasons.append("Identified as junior/mid developer position.")
         else:
             score += 20
+
+        if is_senior:
+            reasons.append("Requires senior/lead level.")
+        else:
+            score += 25
+
         if matched_skills:
-            score += 20
+            score += 30
+            reasons.append(f"Matched skills: {', '.join(matched_skills)}.")
         
-        has_preferred_loc = any(loc in loc_lower for loc in ["bekasi", "jakarta", "depok", "tangerang", "bogor", "remote"])
+        has_preferred_loc = any(loc in loc_lower for loc in ["bekasi", "jakarta", "depok", "tangerang", "bogor", "remote", "indonesia"])
         if has_preferred_loc:
             score += 15
         else:
-            reasons.append("Location mismatch: not in preferred cities.")
+            reasons.append("Location outside primary cities.")
 
         score = max(0, min(100, score))
-        recommended = score >= settings.SCORE_THRESHOLD and is_intern and not is_senior
+        recommended = score >= settings.SCORE_THRESHOLD and not is_senior
 
         return AIResult(
             recommended=recommended,

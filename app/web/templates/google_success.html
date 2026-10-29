@@ -25,7 +25,7 @@
                     <span class="text-emerald-300 font-bold">{{ email }}</span>
                 </div>
                 <div class="flex justify-between">
-                    <span class="text-gray-400">Telegram User ID:</span>
+                    <span class="text-gray-400">User ID:</span>
                     <span class="text-indigo-300">{{ user_id }}</span>
                 </div>
                 <div class="flex justify-between">
@@ -33,20 +33,28 @@
                     <span class="text-blue-300">Gmail Send (Direct API)</span>
                 </div>
                 <div class="flex justify-between">
-                    <span class="text-gray-400">Status:</span>
-                    <span class="text-emerald-400 font-bold">Terotorisasi & Aktif</span>
+                    <span class="text-gray-400">Status Akses:</span>
+                    <span class="{% if is_approved %}text-emerald-400 font-bold{% else %}text-amber-400 font-bold{% endif %}">
+                        {{ status_label }}
+                    </span>
                 </div>
             </div>
 
+            {% if is_approved %}
             <p class="text-xs text-gray-400 mb-6">
-                Bot PKL Finder kini dapat mengirimkan email lamaran magang secara otomatis atas nama email Anda dengan melampirkan CV lengkap.
+                Akun Anda telah disetujui! Anda dapat langsung mencari lowongan kerja dan mengirim email lamaran dengan lampiran CV via Gmail API.
             </p>
+            {% else %}
+            <p class="text-xs text-amber-300/80 mb-6 bg-amber-500/10 p-3 rounded-xl border border-amber-500/20">
+                Notifikasi pendaftaran telah dikirim ke Admin. Begitu Admin menyetujui, Anda langsung dapat menggunakan seluruh fitur pencarian kerja.
+            </p>
+            {% endif %}
 
             <a
-                href="https://t.me/"
+                href="https://t.me/findpkl_bot"
                 class="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm rounded-xl shadow-lg shadow-indigo-600/30 transition block"
             >
-                Kembali ke Telegram Bot
+                Buka Telegram Bot (@findpkl_bot)
             </a>
         </div>
     </div>

@@ -1,7 +1,7 @@
 import json
 import hashlib
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from sqlalchemy import select, func, desc
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
@@ -35,16 +35,30 @@ class JobService:
         """Generate a unique SHA-256 hash representing the job URL."""
         return hashlib.sha256(url.encode("utf-8")).hexdigest()
 
-    async def run_scraping_and_matching(self) -> List[Tuple[int, Job]]:
+    async def run_scraping_and_matching(self, target_user_id: Optional[int] = None) -> List[Tuple[int, Job]]:
         """Runs scrapers, saves global Job records, and matches them against user CVs.
+        If target_user_id is provided, scrapes specifically using user's detected career keywords.
         Returns:
             List[Tuple[user_id, Job]] newly recommended jobs per user.
         """
-        logger.info("Starting automated job scraping and matching cycle")
+        logger.info(f"Starting job scraping and matching cycle (target_user_id: {target_user_id})")
         all_scraped_jobs: List[Dict[str, Any]] = []
 
         keywords = settings.keywords_list
         locations = settings.locations_list
+
+        # If running for a specific user, use their personalized keywords if available
+        if target_user_id:
+            async with async_session_maker() as session:
+                user_cv = await cv_service.get_active_cv_profile(session, target_user_id)
+                if user_cv and user_cv.search_keywords:
+                    try:
+                        user_kws = json.loads(user_cv.search_keywords)
+                        if user_kws and isinstance(user_kws, list):
+                            keywords = [k.strip() for k in user_kws if k and k.strip()]
+                            logger.info(f"Using personalized search keywords for User {target_user_id}: {keywords}")
+                    except Exception as e:
+                        logger.warning(f"Failed to parse user search_keywords: {e}")
 
         # Track scraper execution summary
         scraper_stats: Dict[str, Any] = {}
@@ -153,6 +167,16 @@ class JobService:
                 default_cv_text = "SMK Negeri 2 Bekasi Software Engineering. Python, C++, Embedded Systems, IoT, Robotics."
                 mock_admin_cv = CVProfile(user_id=settings.TELEGRAM_ADMIN_ID, filename="default", cv_text=default_cv_text)
                 cv_profiles = [mock_admin_cv]
+
+            if target_user_id:
+                cv_profiles = [p for p in cv_profiles if p.user_id == target_user_id]
+                if not cv_profiles:
+                    # Query this specific user directly
+                    u_stmt = select(CVProfile).where(CVProfile.user_id == target_user_id)
+                    u_res = await session.execute(u_stmt)
+                    user_prof = u_res.scalar_one_or_none()
+                    if user_prof:
+                        cv_profiles = [user_prof]
 
             for cv_profile in cv_profiles:
                 uid = cv_profile.user_id

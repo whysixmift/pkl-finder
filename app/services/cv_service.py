@@ -77,6 +77,20 @@ class CVService:
             logger.error(f"Failed to persist CV file on disk: {e}")
             saved_file_path = None
 
+        # AI CV Intelligence Analysis
+        try:
+            from app.ai.evaluator import evaluator
+            intel = await evaluator.analyze_cv_intelligence(cv_text)
+        except Exception as e:
+            logger.error(f"Error during AI CV analysis: {e}")
+            intel = {}
+
+        import json
+        detected_roles_json = json.dumps(intel.get("recommended_roles", []))
+        detected_skills_json = json.dumps(intel.get("top_skills", []))
+        search_keywords_json = json.dumps(intel.get("search_keywords", []))
+        candidate_summary = intel.get("summary", "")
+
         stmt = select(CVProfile).where(CVProfile.user_id == user_id)
         res = await session.execute(stmt)
         profile = res.scalar_one_or_none()
@@ -85,13 +99,21 @@ class CVService:
             profile.filename = clean_name
             profile.file_path = saved_file_path
             profile.cv_text = cv_text
+            profile.detected_roles = detected_roles_json
+            profile.detected_skills = detected_skills_json
+            profile.search_keywords = search_keywords_json
+            profile.candidate_summary = candidate_summary
             profile.uploaded_at = datetime.now(timezone.utc).replace(tzinfo=None)
         else:
             profile = CVProfile(
                 user_id=user_id,
                 filename=clean_name,
                 file_path=saved_file_path,
-                cv_text=cv_text
+                cv_text=cv_text,
+                detected_roles=detected_roles_json,
+                detected_skills=detected_skills_json,
+                search_keywords=search_keywords_json,
+                candidate_summary=candidate_summary
             )
             session.add(profile)
 

@@ -42,4 +42,33 @@ class CVAgent(BaseAgent):
             self.mark_failure(start, e)
             return None
 
+    def get_parsed_intelligence(self, profile: CVProfile) -> Dict[str, Any]:
+        """Convert stored JSON strings into structured dict."""
+        import json
+        roles = []
+        skills = []
+        keywords = []
+        if profile.detected_roles:
+            try:
+                roles = json.loads(profile.detected_roles)
+            except Exception:
+                roles = []
+        if profile.detected_skills:
+            try:
+                skills = json.loads(profile.detected_skills)
+            except Exception:
+                skills = []
+        if profile.search_keywords:
+            try:
+                keywords = json.loads(profile.search_keywords)
+            except Exception:
+                keywords = []
+
+        return {
+            "roles": roles,
+            "skills": skills,
+            "keywords": keywords,
+            "summary": profile.candidate_summary or "Profil kandidat tersimpan."
+        }
+
 cv_agent = CVAgent()

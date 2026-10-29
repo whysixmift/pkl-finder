@@ -153,6 +153,18 @@ async def admin_users_add(identifier: str = Form(...), notes: Optional[str] = Fo
     else:
         return RedirectResponse(url=f"/admin/users?err={msg}", status_code=status.HTTP_303_SEE_OTHER)
 
+@router.post("/users/{whitelist_id}/approve")
+async def admin_users_approve(whitelist_id: int):
+    """Approve a pending or suspended user."""
+    success, msg, _ = await access_control_agent.approve_user(whitelist_id)
+    return RedirectResponse(url=f"/admin/users?msg={msg}", status_code=status.HTTP_303_SEE_OTHER)
+
+@router.post("/users/{whitelist_id}/reject")
+async def admin_users_reject(whitelist_id: int):
+    """Reject or suspend a user."""
+    success, msg, _ = await access_control_agent.reject_user(whitelist_id)
+    return RedirectResponse(url=f"/admin/users?msg={msg}", status_code=status.HTTP_303_SEE_OTHER)
+
 @router.post("/users/{whitelist_id}/toggle")
 async def admin_users_toggle(whitelist_id: int):
     """Toggle active/suspended status for whitelisted user."""
@@ -236,6 +248,7 @@ async def admin_settings_page(request: Request, msg: Optional[str] = None, err: 
 
     current_values = {
         "TELEGRAM_BOT_TOKEN": env_dict.get("TELEGRAM_BOT_TOKEN", settings.TELEGRAM_BOT_TOKEN),
+        "ADMIN_BOT_TOKEN": env_dict.get("ADMIN_BOT_TOKEN", settings.ADMIN_BOT_TOKEN),
         "TELEGRAM_ADMIN_ID": env_dict.get("TELEGRAM_ADMIN_ID", str(settings.TELEGRAM_ADMIN_ID)),
         "OPENROUTER_API_KEY": env_dict.get("OPENROUTER_API_KEY", settings.OPENROUTER_API_KEY),
         "PRIMARY_MODEL": env_dict.get("PRIMARY_MODEL", settings.PRIMARY_MODEL),
@@ -274,6 +287,7 @@ async def admin_settings_page(request: Request, msg: Optional[str] = None, err: 
 @router.post("/settings/form")
 async def admin_save_settings_form(
     telegram_bot_token: str = Form(...),
+    admin_bot_token: str = Form(""),
     telegram_admin_id: str = Form(...),
     openrouter_api_key: str = Form(...),
     primary_model: str = Form("google/gemma-4-31b-it:free"),
@@ -297,6 +311,7 @@ async def admin_save_settings_form(
     """Save structured settings form directly into .env."""
     updates = {
         "TELEGRAM_BOT_TOKEN": telegram_bot_token.strip(),
+        "ADMIN_BOT_TOKEN": admin_bot_token.strip(),
         "TELEGRAM_ADMIN_ID": telegram_admin_id.strip(),
         "OPENROUTER_API_KEY": openrouter_api_key.strip(),
         "PRIMARY_MODEL": primary_model.strip(),

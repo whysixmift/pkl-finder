@@ -68,10 +68,23 @@ async def google_auth_callback(request: Request, code: str = "", state: str = ""
 
     if success:
         user_email = message.split(": ")[-1].split(" ")[0] if ": " in message else "user@gmail.com"
+        from app.agents.access_control_agent import access_control_agent
+        whitelist_rec, is_new = await access_control_agent.get_or_create_pending_user(
+            user_id=user_id,
+            email=user_email,
+            source="google_sso",
+            details=f"Email Google: {user_email}"
+        )
+        is_approved = whitelist_rec.is_active and getattr(whitelist_rec, "status", "") == "approved"
         return templates.TemplateResponse(
             request,
             "google_success.html",
-            {"email": user_email, "user_id": user_id}
+            {
+                "email": user_email,
+                "user_id": user_id,
+                "is_approved": is_approved,
+                "status_label": "Aktif & Disetujui" if is_approved else "Menunggu Persetujuan Admin"
+            }
         )
     else:
         return HTMLResponse(f"<h3>Google SSO Gagal:</h3><p>{message}</p>", status_code=400)

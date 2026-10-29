@@ -93,6 +93,8 @@ async def run_startup_diagnostics(application) -> None:
     grid += "=" * 55 + "\n"
     grid += f"[+] Database & ORM Sync : {db_status}\n"
     grid += f"[+] Telegram Bot API    : {tg_status} ({bot_username})\n"
+    admin_bot_info = "OK (@nigaballsblotbot)" if settings.ADMIN_BOT_TOKEN and not settings.ADMIN_BOT_TOKEN.startswith("mock_") else "Not Configured"
+    grid += f"[+] Admin Dashboard Bot: {admin_bot_info}\n"
     grid += f"[+] OpenRouter Client   : {or_status}\n"
     grid += f"[+] Admin SMTP Delivery : {smtp_status}\n"
     grid += "[+] Scheduler Engine    : OK\n"
@@ -148,6 +150,17 @@ def run_bot_branch() -> None:
         return
 
     try:
+        # Launch dedicated Admin Bot if configured
+        if settings.ADMIN_BOT_TOKEN and not settings.ADMIN_BOT_TOKEN.startswith("mock_"):
+            from app.bot.admin_bot import run_admin_bot_polling
+            admin_bot_thread = threading.Thread(
+                target=run_admin_bot_polling,
+                name="AdminBot-Polling",
+                daemon=True
+            )
+            admin_bot_thread.start()
+            logger.info("Dedicated Admin Dashboard Bot thread launched successfully.")
+
         application = (
             ApplicationBuilder()
             .token(settings.TELEGRAM_BOT_TOKEN)
