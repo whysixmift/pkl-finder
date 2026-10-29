@@ -9,6 +9,7 @@ TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__f
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 @router.get("/", response_class=HTMLResponse)
+@router.head("/", response_class=HTMLResponse)
 async def public_landing(request: Request):
     """Public SaaS landing page."""
     return templates.TemplateResponse(request, "landing.html", {})
