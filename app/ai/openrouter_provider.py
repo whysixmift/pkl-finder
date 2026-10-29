@@ -95,7 +95,8 @@ class OpenRouterProvider(BaseLLMProvider):
         payload = {
             "model": settings.PRIMARY_MODEL,
             "messages": [{"role": "user", "content": "Ping"}],
-            "max_tokens": 5
+            "max_tokens": 5,
+            "stream": False
         }
 
         start_time = time.perf_counter()
@@ -186,7 +187,8 @@ class OpenRouterProvider(BaseLLMProvider):
                     {"role": "system", "content": sys_prompt},
                     {"role": "user", "content": prompt}
                 ],
-                "response_format": {"type": "json_object"}
+                "response_format": {"type": "json_object"},
+                "stream": False
             }
 
         try:
@@ -239,7 +241,8 @@ class OpenRouterProvider(BaseLLMProvider):
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Draft the personalized internship application email for {company_name}."}
                 ],
-                "response_format": {"type": "json_object"}
+                "response_format": {"type": "json_object"},
+                "stream": False
             }
 
         try:

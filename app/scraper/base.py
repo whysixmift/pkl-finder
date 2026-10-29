@@ -44,6 +44,10 @@ class BaseScraper:
         self, url: str, headers: Optional[Dict[str, str]] = None, retries: int = 3, is_json: bool = False
     ) -> Optional[Any]:
         """Fetch content from a URL with retries, exponential backoff, and error handling."""
+        if not url or not isinstance(url, str) or not url.strip():
+            logger.debug(f"[{self.source_name}] Empty or invalid URL passed to fetch_url")
+            return None
+
         if self.is_disabled:
             logger.debug(f"[{self.source_name}] Request skipped. Scraper is currently disabled.")
             return None

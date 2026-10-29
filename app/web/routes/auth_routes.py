@@ -57,6 +57,7 @@ async def google_auth_initiate(user_id: int = 0):
     return RedirectResponse(url=auth_url, status_code=status.HTTP_303_SEE_OTHER)
 
 @router.get("/api/auth/google/callback", response_class=HTMLResponse)
+@router.get("/auth/google/callback", response_class=HTMLResponse)
 async def google_auth_callback(request: Request, code: str = "", state: str = ""):
     """Handle Google OAuth2 callback and store Gmail API credentials."""
     if not code or not state:

@@ -37,6 +37,12 @@ class CompanyCareerCrawler(BaseScraper):
 
             for company in companies:
                 try:
+                    if not company.website or not isinstance(company.website, str) or not company.website.strip():
+                        logger.info(f"Skipping crawling company ID {company.id} ({company.name}): No website URL provided")
+                        company.status = "crawled"
+                        await session.commit()
+                        continue
+
                     logger.info(f"Crawling company: {company.name} ({company.website})")
                     career_url, email = await self.crawl_company_website(company.website)
                     
@@ -69,6 +75,13 @@ class CompanyCareerCrawler(BaseScraper):
 
     async def crawl_company_website(self, homepage: str) -> Tuple[Optional[str], Optional[str]]:
         """Scans home domain for career links and recruitment emails."""
+        if not homepage or not isinstance(homepage, str) or not homepage.strip():
+            return None, None
+            
+        homepage = homepage.strip()
+        if not (homepage.startswith("http://") or homepage.startswith("https://")):
+            homepage = f"https://{homepage}"
+
         html = await self.fetch_url(homepage)
         if not html:
             return None, None
