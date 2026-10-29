@@ -18,8 +18,9 @@ class TestGoogleAuth(unittest.TestCase):
         self.assertIn("access_type=offline", auth_url)
         self.assertIn("prompt=consent", auth_url)
         
-        # Verify Gmail send scope
-        self.assertIn("gmail.send", auth_url)
+        # Verify SSO scopes
+        self.assertIn("userinfo.email", auth_url)
+        self.assertIn("openid", auth_url)
 
     def test_state_encode_and_decode(self) -> None:
         """Test encoding user_id in state and decoding it back."""

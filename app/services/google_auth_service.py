@@ -22,9 +22,9 @@ GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 
 GMAIL_SCOPES = [
-    "https://www.googleapis.com/auth/gmail.send",
+    "openid",
     "https://www.googleapis.com/auth/userinfo.email",
-    "openid"
+    "https://www.googleapis.com/auth/userinfo.profile"
 ]
 
 class GoogleAuthService:
