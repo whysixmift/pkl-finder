@@ -164,6 +164,7 @@ def run_bot_branch() -> None:
         application = (
             ApplicationBuilder()
             .token(settings.TELEGRAM_BOT_TOKEN)
+            .concurrent_updates(True)
             .post_init(post_init)
             .post_shutdown(post_shutdown)
             .build()

@@ -1,8 +1,10 @@
 import os
 import json
+import time
+import asyncio
 from functools import wraps
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Set, Optional
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -278,11 +280,152 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 # ----------------- SYSTEM & CORE COMMAND HANDLERS -----------------
 
+ACTIVE_USER_SCRAPES: Set[int] = set()
+
+def render_progress_bar(percent: int, length: int = 15) -> str:
+    """Render a text-based progress bar."""
+    filled = max(0, min(length, int(round(length * percent / 100))))
+    bar = "█" * filled + "░" * (length - filled)
+    return f"[{bar}] {percent}%"
+
+async def run_background_user_scraping(
+    bot,
+    chat_id: int,
+    user_id: int,
+    progress_msg_id: int,
+    roles_str: str
+) -> None:
+    """Execute background scraping, AI evaluation, and periodically update progress bar every 15 seconds."""
+    start_time = time.time()
+    try:
+        scrape_task = asyncio.create_task(job_service.run_scraping_and_matching(target_user_id=user_id))
+        
+        stages = [
+            (25, "Memindai Glints & LinkedIn..."),
+            (45, "Memindai Indeed & JobStreet..."),
+            (65, "Memindai Kalibrr & Google Jobs..."),
+            (80, "Mengevaluasi kesesuaian profil CV dengan AI..."),
+            (90, "Menyaring lowongan dengan match score tertinggi..."),
+            (95, "Menyusun kartu lowongan rekomendasi..."),
+        ]
+        
+        step = 0
+        while not scrape_task.done():
+            await asyncio.sleep(15)
+            if scrape_task.done():
+                break
+
+            elapsed = int(time.time() - start_time)
+            percent, platform_desc = stages[min(step, len(stages) - 1)]
+            step += 1
+
+            bar = render_progress_bar(percent)
+            updated_text = (
+                f"🔄 <b>Pencarian Lowongan Kerja Sedang Berjalan...</b>\n\n"
+                f"🎯 <b>Target:</b> {roles_str}\n"
+                f"📊 <b>Progress:</b> <code>{bar}</code>\n"
+                f"🌐 <b>Aktivitas:</b> {platform_desc}\n"
+                f"⏱️ <b>Waktu:</b> {elapsed} detik\n\n"
+                f"💡 <i>Anda dapat tetap mengirim perintah (/help, /profile, dll) tanpa mengganggu proses scraping ini!</i>"
+            )
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=progress_msg_id,
+                    text=updated_text,
+                    parse_mode="HTML"
+                )
+            except Exception as edit_err:
+                logger.debug(f"Progress update notification note: {edit_err}")
+
+        # Task finished
+        new_jobs = await scrape_task
+        elapsed = int(time.time() - start_time)
+
+        # Trigger company discovery in background
+        try:
+            asyncio.create_task(discovery_engine.discover_companies())
+        except Exception:
+            pass
+
+        user_recs = [job for uid, job in new_jobs if uid == user_id]
+
+        if user_recs:
+            finished_bar = render_progress_bar(100)
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=progress_msg_id,
+                text=(
+                    f"✅ <b>Scraping & Analisis Selesai!</b> (⏱️ {elapsed} detik)\n"
+                    f"📊 <b>Progress:</b> <code>{finished_bar}</code>\n\n"
+                    f"🎉 Menemukan <b>{len(user_recs)}</b> lowongan kerja rekomendasi yang cocok untuk profil Anda. Berikut daftarnya:"
+                ),
+                parse_mode="HTML"
+            )
+            for job in user_recs:
+                text = format_job_message(job, user_id)
+                keyboard = get_job_keyboard(job, is_fav=False)
+                await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard, parse_mode="HTML")
+        else:
+            existing_recs = await job_service.get_latest_jobs(user_id=user_id, limit=5, recommended_only=True)
+            if existing_recs:
+                finished_bar = render_progress_bar(100)
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=progress_msg_id,
+                    text=(
+                        f"✅ <b>Scraping Selesai!</b> (⏱️ {elapsed} detik)\n"
+                        f"📊 <b>Progress:</b> <code>{finished_bar}</code>\n\n"
+                        f"📌 Tidak ada lowongan baru unik saat ini, menampilkan <b>{len(existing_recs)}</b> lowongan rekomendasi tersimpan untuk profil Anda:"
+                    ),
+                    parse_mode="HTML"
+                )
+                for job in existing_recs:
+                    text = format_job_message(job, user_id)
+                    keyboard = get_job_keyboard(job, is_fav=False)
+                    await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard, parse_mode="HTML")
+            else:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=progress_msg_id,
+                    text=(
+                        f"✅ <b>Scraping Selesai!</b> (⏱️ {elapsed} detik)\n\n"
+                        "Belum ada lowongan baru dengan skor kecocokan tinggi saat ini. "
+                        "Coba perbarui CV atau coba kembali dalam beberapa saat."
+                    ),
+                    parse_mode="HTML"
+                )
+    except Exception as e:
+        logger.error(f"Error in background scraping for user {user_id}: {e}", exc_info=True)
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=progress_msg_id,
+                text=f"❌ <b>Terjadi Kendala Saat Scraping:</b> {e}\n\nSilakan coba lagi beberapa saat lagi dengan /search.",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+    finally:
+        ACTIVE_USER_SCRAPES.discard(user_id)
+
 @error_boundary
 @whitelist_required
 async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     target_msg = update.effective_message
+
+    # Check if scraping is already actively running for this user
+    if user_id in ACTIVE_USER_SCRAPES:
+        await target_msg.reply_text(
+            "⏳ <b>Proses Scraping Sedang Berjalan!</b>\n\n"
+            "Bot sedang aktif memindai lowongan di background untuk profil Anda. "
+            "Hasilnya akan langsung dikirimkan ke sini begitu selesai.\n\n"
+            "💡 <i>Anda tetap dapat menggunakan perintah lain seperti /help, /profile, atau /status.</i>",
+            parse_mode="HTML"
+        )
+        return
 
     # Check CV
     async with async_session_maker() as session:
@@ -297,7 +440,6 @@ async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["state"] = "AWAITING_CV"
         return
 
-    import json
     roles = []
     if user_cv.detected_roles:
         try:
@@ -306,51 +448,46 @@ async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             roles = []
     roles_str = ", ".join(roles[:3]) if roles else "Tech & Software"
 
-    wait_msg = await target_msg.reply_text(
-        f"🔍 <b>Memulai Pencarian Kerja Terpersonalisasi...</b>\n\n"
-        f"🎯 <b>Target Posisi:</b> {roles_str}\n"
-        "⚡ <i>Menjalankan scraping di Glints, LinkedIn, Indeed, JobStreet, Kalibrr, dan Google Jobs...</i>",
+    # Step 1: Show "Starting Scrap"
+    starting_msg = await target_msg.reply_text(
+        "🚀 <b>Starting Scrap...</b>",
         parse_mode="HTML"
     )
 
-    new_jobs = await job_service.run_scraping_and_matching(target_user_id=user_id)
-
-    # Run company discovery in background
+    # Step 2: Delete "Starting Scrap" message
+    await asyncio.sleep(1.2)
     try:
-        import asyncio
-        asyncio.create_task(discovery_engine.discover_companies())
-    except Exception as ce:
-        logger.error(f"Error starting background company discovery: {ce}")
+        await context.bot.delete_message(chat_id=chat_id, message_id=starting_msg.message_id)
+    except Exception as e:
+        logger.debug(f"Could not delete starting message: {e}")
 
-    # Extract jobs recommended specifically for this user
-    user_recs = [job for uid, job in new_jobs if uid == user_id]
+    # Step 3: Send progress loading bar message
+    bar = render_progress_bar(10)
+    progress_text = (
+        f"🔄 <b>Pencarian Lowongan Kerja Sedang Berjalan...</b>\n\n"
+        f"🎯 <b>Target Posisi:</b> {roles_str}\n"
+        f"📊 <b>Progress:</b> <code>{bar}</code>\n"
+        f"🌐 <b>Platform:</b> Memindai Glints & LinkedIn...\n"
+        f"⏱️ <b>Waktu:</b> 0s\n\n"
+        f"💡 <i>Anda dapat tetap menggunakan perintah lain (/help, /profile, /settings, dll) tanpa mengganggu proses scraping ini!</i>"
+    )
+    progress_msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text=progress_text,
+        parse_mode="HTML"
+    )
 
-    if user_recs:
-        await wait_msg.edit_text(
-            f"✅ <b>Scraping Selesai!</b> Menemukan <b>{len(user_recs)}</b> lowongan kerja rekomendasi yang cocok untuk profil Anda.",
-            parse_mode="HTML"
+    # Step 4: Add to active set and launch background task
+    ACTIVE_USER_SCRAPES.add(user_id)
+    asyncio.create_task(
+        run_background_user_scraping(
+            bot=context.bot,
+            chat_id=chat_id,
+            user_id=user_id,
+            progress_msg_id=progress_msg.message_id,
+            roles_str=roles_str
         )
-        for job in user_recs:
-            text = format_job_message(job, user_id)
-            keyboard = get_job_keyboard(job, is_fav=False)
-            await target_msg.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
-    else:
-        # Check existing latest jobs in DB for user
-        existing_recs = await job_service.get_latest_jobs(user_id=user_id, limit=5, recommended_only=True)
-        if existing_recs:
-            await wait_msg.edit_text(
-                f"✅ <b>Scraping Selesai!</b> Menampilkan <b>{len(existing_recs)}</b> lowongan kerja rekomendasi terbaik untuk profil Anda:",
-                parse_mode="HTML"
-            )
-            for job in existing_recs:
-                text = format_job_message(job, user_id)
-                keyboard = get_job_keyboard(job, is_fav=False)
-                await target_msg.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
-        else:
-            await wait_msg.edit_text(
-                "✅ <b>Scraping Selesai!</b> Belum ada lowongan baru dengan skor kecocokan tinggi saat ini. Coba perbarui CV atau coba kembali dalam beberapa saat.",
-                parse_mode="HTML"
-            )
+    )
 
 @error_boundary
 @whitelist_required

@@ -58,10 +58,33 @@ async def google_auth_initiate(user_id: int = 0):
 
 @router.get("/api/auth/google/callback", response_class=HTMLResponse)
 @router.get("/auth/google/callback", response_class=HTMLResponse)
-async def google_auth_callback(request: Request, code: str = "", state: str = ""):
+async def google_auth_callback(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = ""
+):
     """Handle Google OAuth2 callback and store Gmail API credentials."""
+    if error:
+        logger.warning(f"Google OAuth returned error parameter: {error}")
+        return HTMLResponse(
+            f"<div style='font-family:sans-serif;padding:30px;max-width:600px;margin:auto;text-align:center;'>"
+            f"<h2 style='color:#ef4444;'>Autentikasi Dibatalkan</h2>"
+            f"<p>Google mengembalikan pesan: <code>{error}</code></p>"
+            f"<a href='/' style='display:inline-block;margin-top:15px;padding:10px 20px;background:#4f46e5;color:white;text-decoration:none;border-radius:8px;'>Kembali ke Beranda</a>"
+            f"</div>",
+            status_code=400
+        )
+
     if not code or not state:
-        return HTMLResponse("<h3>Error: Missing code or state from Google OAuth</h3>", status_code=400)
+        return HTMLResponse(
+            "<div style='font-family:sans-serif;padding:30px;max-width:600px;margin:auto;text-align:center;'>"
+            "<h2 style='color:#ef4444;'>Parameter Tidak Lengkap</h2>"
+            "<p>Missing code or state from Google OAuth callback.</p>"
+            "<a href='/' style='display:inline-block;margin-top:15px;padding:10px 20px;background:#4f46e5;color:white;text-decoration:none;border-radius:8px;'>Kembali ke Beranda</a>"
+            "</div>",
+            status_code=400
+        )
 
     async with async_session_maker() as session:
         success, message, user_id = await google_auth_service.handle_oauth_callback(session, code, state)

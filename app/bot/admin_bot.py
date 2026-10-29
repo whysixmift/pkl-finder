@@ -283,7 +283,7 @@ def run_admin_bot_polling() -> None:
 
     try:
         logger.info("Starting Dedicated Admin Bot polling (@nigaballsblotbot)...")
-        app = ApplicationBuilder().token(token).build()
+        app = ApplicationBuilder().token(token).concurrent_updates(True).build()
         setup_admin_bot(app)
         app.run_polling()
     except Exception as e:

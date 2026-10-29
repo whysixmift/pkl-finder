@@ -76,3 +76,17 @@ async def test_career_evaluator_supports_full_time_jobs():
     # Under the updated logic, technical skill matches should produce high score
     assert res.score >= 50
     assert any("Python" in s or "Backend" in s for s in res.matched_skills)
+
+def test_progress_bar_rendering():
+    """Verify loading bar generation formatting."""
+    from app.bot.handlers import render_progress_bar
+    bar_0 = render_progress_bar(0)
+    bar_50 = render_progress_bar(50)
+    bar_100 = render_progress_bar(100)
+
+    assert "0%" in bar_0
+    assert "50%" in bar_50
+    assert "100%" in bar_100
+    assert "█" in bar_50
+    assert "░" in bar_50
+    assert "░" not in bar_100
