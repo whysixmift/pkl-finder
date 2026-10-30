@@ -90,3 +90,58 @@ def test_progress_bar_rendering():
     assert "█" in bar_50
     assert "░" in bar_50
     assert "░" not in bar_100
+
+@pytest.mark.asyncio
+async def test_get_latest_jobs_no_ambiguous_column():
+    """Verify get_latest_jobs runs cleanly without ambiguous column SQL errors."""
+    from app.services.job_service import JobService
+    from app.database.models import Job, AIScore
+    import hashlib
+
+    await init_db()
+    service = JobService()
+    test_user_id = 7669464229
+
+    async with async_session_maker() as session:
+        test_url = "https://example.com/job/ambiguity-test-1"
+        job_key = hashlib.sha256(test_url.encode()).hexdigest()
+        job = Job(
+            job_key=job_key,
+            title="Software Test Engineer",
+            company_name="Test Corp",
+            location="Remote",
+            description="Testing SQL ambiguous joins",
+            url=test_url,
+            source="manual"
+        )
+        session.add(job)
+        await session.flush()
+
+        ai_score = AIScore(
+            user_id=test_user_id,
+            job_id=job.id,
+            recommended=True,
+            score=95,
+            reason=json.dumps(["Excellent fit"]),
+            matched_skills=json.dumps(["Python"]),
+            missing_skills=json.dumps([]),
+            summary="Strong match."
+        )
+        session.add(ai_score)
+        await session.commit()
+
+        job_id = job.id
+
+    # Test both queries (recommended_only=True and recommended_only=False)
+    jobs_rec = await service.get_latest_jobs(user_id=test_user_id, limit=5, recommended_only=True)
+    assert any(j.id == job_id for j in jobs_rec)
+
+    jobs_all = await service.get_latest_jobs(user_id=test_user_id, limit=5, recommended_only=False)
+    assert any(j.id == job_id for j in jobs_all)
+
+    # Clean up
+    async with async_session_maker() as session:
+        j = await session.get(Job, job_id)
+        if j:
+            await session.delete(j)
+            await session.commit()

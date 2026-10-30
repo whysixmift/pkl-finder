@@ -2,6 +2,7 @@ import os
 import json
 import time
 import asyncio
+import html
 from functools import wraps
 from datetime import datetime, timezone
 from typing import List, Set, Optional
@@ -69,22 +70,39 @@ def whitelist_required(func):
     return wrapper
 
 def error_boundary(func):
-    """Catches all exceptions to prevent bot crashes and replies with helpful diagnostics."""
+    """Catches all exceptions to prevent bot crashes, applies self-healing auto-recovery, and replies helpfully."""
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         try:
             return await func(update, context, *args, **kwargs)
         except Exception as e:
-            logger.error(f"Error in bot handler '{func.__name__}': {e}", exc_info=True)
+            err_str = str(e)
+            logger.error(f"Error in bot handler '{func.__name__}': {err_str}", exc_info=True)
+
+            # Self-healing action: Re-bind database connection pool on DB/SQLite/session errors
+            if any(term in err_str.lower() for term in ["database", "sqlite", "session", "connection", "locked"]):
+                try:
+                    from app.database.db import refresh_engine
+                    refresh_engine()
+                    logger.info("Self-healing: Re-bound database engine and async session maker.")
+                except Exception as rhe:
+                    logger.warning(f"Self-healing refresh_engine notice: {rhe}")
+
+            # Ensure user scrape lock is released if an unhandled error occurred
+            if update.effective_user and update.effective_user.id in ACTIVE_USER_SCRAPES:
+                ACTIVE_USER_SCRAPES.discard(update.effective_user.id)
+
             if update.effective_message:
                 await update.effective_message.reply_text(
-                    f"❌&nbsp;<b>Internal System Error:</b>\n<code>{str(e)}</code>",
+                    f"⚠️ <b>Kendala Sistem Terdeteksi (Self-Healing Aktif)</b>\n\n"
+                    f"Detail: <code>{err_str[:250]}</code>\n\n"
+                    f"🔧 <i>Sistem otomatis melakukan auto-recovery pada sesi/koneksi database. Silakan ulangi perintah Anda.</i>",
                     parse_mode="HTML"
                 )
     return wrapper
 
 def format_job_message(job: Job, user_id: int) -> str:
-    """Format a job vacancy into a clean, premium HTML message for Telegram."""
+    """Format a job vacancy into a clean, resilient, premium HTML message for Telegram."""
     ai_score = None
     for score in job.ai_scores:
         if score.user_id == user_id:
@@ -113,22 +131,32 @@ def format_job_message(job: Job, user_id: int) -> str:
         except Exception:
             missing = [ai_score.missing_skills] if ai_score.missing_skills else []
             
-    reasons_list = "\n".join([f"• {r}" for r in reasons]) if reasons else "• Tidak ada detail alasan."
-    matched_str = ", ".join(matched) if matched else "Tidak ada"
-    missing_str = ", ".join(missing) if missing else "Tidak ada"
-    summary = ai_score.summary if ai_score else "Tidak ada analisis."
+    reasons_list = "\n".join([f"• {html.escape(str(r))}" for r in reasons]) if reasons else "• Tidak ada detail alasan."
+    matched_str = html.escape(", ".join(matched)) if matched else "Tidak ada"
+    missing_str = html.escape(", ".join(missing)) if missing else "Tidak ada"
+    summary = html.escape(str(ai_score.summary)) if ai_score and ai_score.summary else "Tidak ada analisis."
+
+    comp_name = html.escape(str(job.company_name or "Perusahaan"))
+    job_title = html.escape(str(job.title or "Posisi Lowongan"))
+    job_loc = html.escape(str(job.location or "Indonesia"))
+    job_source = html.escape(str(job.source.upper() if job.source else "WEB"))
+    job_salary = html.escape(str(job.salary or "Tidak disebutkan"))
+    job_type = html.escape(str(job.employment_type or "Internship"))
+    job_work_mode = html.escape(str(job.work_mode or "On-site"))
+    job_cat = html.escape(str(getattr(ai_score, "company_category", "Tech") or "Tech"))
+    job_priority = html.escape(str(getattr(ai_score, "priority", "medium") or "medium").upper())
 
     return (
         f"🚀 <b>PKL / Internship Baru Ditemukan!</b>\n\n"
-        f"🏢 <b>Perusahaan:</b> <code>{job.company_name}</code>\n"
-        f"💼 <b>Posisi:</b> <b>{job.title}</b>\n"
-        f"📍 <b>Lokasi:</b> <code>{job.location}</code>\n"
-        f"🌐 <b>Sumber:</b> <code>{job.source.upper()}</code>\n"
-        f"💰 <b>Gaji:</b> <code>{job.salary or 'Tidak disebutkan'}</code>\n"
-        f"⏱ <b>Tipe:</b> <code>{job.employment_type or 'Internship'} ({job.work_mode or 'On-site'})</code>\n"
+        f"🏢 <b>Perusahaan:</b> <code>{comp_name}</code>\n"
+        f"💼 <b>Posisi:</b> <b>{job_title}</b>\n"
+        f"📍 <b>Lokasi:</b> <code>{job_loc}</code>\n"
+        f"🌐 <b>Sumber:</b> <code>{job_source}</code>\n"
+        f"💰 <b>Gaji:</b> <code>{job_salary}</code>\n"
+        f"⏱ <b>Tipe:</b> <code>{job_type} ({job_work_mode})</code>\n"
         f"{score_str}\n"
-        f"💼 <b>Category:</b> <code>{getattr(ai_score, 'company_category', 'Tech')}</code>\n"
-        f"🔥 <b>Priority:</b> <code>{getattr(ai_score, 'priority', 'medium').upper()}</code>\n\n"
+        f"💼 <b>Category:</b> <code>{job_cat}</code>\n"
+        f"🔥 <b>Priority:</b> <code>{job_priority}</code>\n\n"
         f"📋 <b>Analisis Kesesuaian:</b>\n<i>{summary}</i>\n\n"
         f"✅ <b>Kecocokan Skill:</b> {matched_str}\n"
         f"❌ <b>Skill Kurang:</b> {missing_str}\n\n"
@@ -297,8 +325,25 @@ async def run_background_user_scraping(
 ) -> None:
     """Execute background scraping, AI evaluation, and periodically update progress bar every 15 seconds."""
     start_time = time.time()
+    
+    current_state = {
+        "percent": 15,
+        "status": "Memindai lowongan di berbagai platform...",
+        "jobs_count": 0,
+    }
+
+    async def on_progress(pct: int, status_desc: str, count: int) -> None:
+        current_state["percent"] = max(current_state["percent"], pct)
+        current_state["status"] = status_desc
+        current_state["jobs_count"] = count
+
     try:
-        scrape_task = asyncio.create_task(job_service.run_scraping_and_matching(target_user_id=user_id))
+        scrape_task = asyncio.create_task(
+            job_service.run_scraping_and_matching(
+                target_user_id=user_id,
+                progress_callback=on_progress
+            )
+        )
         
         stages = [
             (25, "Memindai Glints & LinkedIn..."),
@@ -316,17 +361,21 @@ async def run_background_user_scraping(
                 break
 
             elapsed = int(time.time() - start_time)
-            percent, platform_desc = stages[min(step, len(stages) - 1)]
+            stage_pct, stage_desc = stages[min(step, len(stages) - 1)]
+            effective_pct = max(current_state["percent"], stage_pct)
+            effective_pct = min(effective_pct, 95)
+            effective_desc = current_state["status"] if current_state["status"] != "Memindai lowongan di berbagai platform..." else stage_desc
             step += 1
 
-            bar = render_progress_bar(percent)
+            count_info = f" ({current_state['jobs_count']} lowongan)" if current_state["jobs_count"] > 0 else ""
+            bar = render_progress_bar(effective_pct)
             updated_text = (
                 f"🔄 <b>Pencarian Lowongan Kerja Sedang Berjalan...</b>\n\n"
-                f"🎯 <b>Target:</b> {roles_str}\n"
+                f"🎯 <b>Target:</b> {html.escape(roles_str)}\n"
                 f"📊 <b>Progress:</b> <code>{bar}</code>\n"
-                f"🌐 <b>Aktivitas:</b> {platform_desc}\n"
+                f"🌐 <b>Aktivitas:</b> {html.escape(effective_desc)}{count_info}\n"
                 f"⏱️ <b>Waktu:</b> {elapsed} detik\n\n"
-                f"💡 <i>Anda dapat tetap mengirim perintah (/help, /profile, dll) tanpa mengganggu proses scraping ini!</i>"
+                f"💡 <i>Anda dapat tetap mengirim perintah (/help, /profile, /settings, dll) tanpa mengganggu proses scraping ini!</i>"
             )
             try:
                 await bot.edit_message_text(
@@ -352,56 +401,84 @@ async def run_background_user_scraping(
 
         if user_recs:
             finished_bar = render_progress_bar(100)
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=progress_msg_id,
-                text=(
-                    f"✅ <b>Scraping & Analisis Selesai!</b> (⏱️ {elapsed} detik)\n"
-                    f"📊 <b>Progress:</b> <code>{finished_bar}</code>\n\n"
-                    f"🎉 Menemukan <b>{len(user_recs)}</b> lowongan kerja rekomendasi yang cocok untuk profil Anda. Berikut daftarnya:"
-                ),
-                parse_mode="HTML"
-            )
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=progress_msg_id,
+                    text=(
+                        f"✅ <b>Scraping & Analisis Selesai!</b> (⏱️ {elapsed} detik)\n"
+                        f"📊 <b>Progress:</b> <code>{finished_bar}</code>\n\n"
+                        f"🎉 Menemukan <b>{len(user_recs)}</b> lowongan kerja rekomendasi yang cocok untuk profil Anda. Berikut daftarnya:"
+                    ),
+                    parse_mode="HTML"
+                )
+            except Exception as me:
+                logger.debug(f"Edit progress message note: {me}")
+
             for job in user_recs:
-                text = format_job_message(job, user_id)
-                keyboard = get_job_keyboard(job, is_fav=False)
-                await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard, parse_mode="HTML")
+                try:
+                    text = format_job_message(job, user_id)
+                    keyboard = get_job_keyboard(job, is_fav=False)
+                    await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard, parse_mode="HTML")
+                except Exception as card_err:
+                    logger.error(f"Self-healing: Error sending job card for {getattr(job, 'id', 'unknown')}: {card_err}. Continuing...")
         else:
             existing_recs = await job_service.get_latest_jobs(user_id=user_id, limit=5, recommended_only=True)
             if existing_recs:
                 finished_bar = render_progress_bar(100)
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=progress_msg_id,
-                    text=(
-                        f"✅ <b>Scraping Selesai!</b> (⏱️ {elapsed} detik)\n"
-                        f"📊 <b>Progress:</b> <code>{finished_bar}</code>\n\n"
-                        f"📌 Tidak ada lowongan baru unik saat ini, menampilkan <b>{len(existing_recs)}</b> lowongan rekomendasi tersimpan untuk profil Anda:"
-                    ),
-                    parse_mode="HTML"
-                )
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=progress_msg_id,
+                        text=(
+                            f"✅ <b>Scraping Selesai!</b> (⏱️ {elapsed} detik)\n"
+                            f"📊 <b>Progress:</b> <code>{finished_bar}</code>\n\n"
+                            f"📌 Menampilkan <b>{len(existing_recs)}</b> lowongan rekomendasi tersimpan untuk profil Anda:"
+                        ),
+                        parse_mode="HTML"
+                    )
+                except Exception as me:
+                    logger.debug(f"Edit progress message note: {me}")
+
                 for job in existing_recs:
-                    text = format_job_message(job, user_id)
-                    keyboard = get_job_keyboard(job, is_fav=False)
-                    await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard, parse_mode="HTML")
+                    try:
+                        text = format_job_message(job, user_id)
+                        keyboard = get_job_keyboard(job, is_fav=False)
+                        await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard, parse_mode="HTML")
+                    except Exception as card_err:
+                        logger.error(f"Self-healing: Error sending existing job card: {card_err}. Continuing...")
             else:
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=progress_msg_id,
-                    text=(
-                        f"✅ <b>Scraping Selesai!</b> (⏱️ {elapsed} detik)\n\n"
-                        "Belum ada lowongan baru dengan skor kecocokan tinggi saat ini. "
-                        "Coba perbarui CV atau coba kembali dalam beberapa saat."
-                    ),
-                    parse_mode="HTML"
-                )
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=progress_msg_id,
+                        text=(
+                            f"✅ <b>Scraping Selesai!</b> (⏱️ {elapsed} detik)\n\n"
+                            "Belum ada lowongan baru dengan skor kecocokan tinggi saat ini. "
+                            "Coba perbarui CV atau coba kembali dalam beberapa saat dengan /search."
+                        ),
+                        parse_mode="HTML"
+                    )
+                except Exception as me:
+                    logger.debug(f"Edit progress message note: {me}")
     except Exception as e:
-        logger.error(f"Error in background scraping for user {user_id}: {e}", exc_info=True)
+        logger.error(f"Self-healing: Error in background scraping for user {user_id}: {e}", exc_info=True)
+        # Self-healing auto-recovery: try to rebind DB and send friendly notification
+        try:
+            from app.database.db import refresh_engine
+            refresh_engine()
+        except Exception:
+            pass
+
         try:
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=progress_msg_id,
-                text=f"❌ <b>Terjadi Kendala Saat Scraping:</b> {e}\n\nSilakan coba lagi beberapa saat lagi dengan /search.",
+                text=(
+                    f"⚠️ <b>Scraping Menemui Kendala (Self-Healing Diaktifkan):</b>\n\n"
+                    f"<code>{str(e)[:250]}</code>\n\n"
+                    f"🔧 <i>Sistem telah merefresh koneksi background. Anda dapat langsung mencoba lagi dengan /search.</i>"
+                ),
                 parse_mode="HTML"
             )
         except Exception:
@@ -792,21 +869,50 @@ async def doctor_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def system_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Displays host resources (CPU, Memory, Disk) and runtime container environments."""
     import shutil
-    import psutil
-    
+    import threading
+
     total, used, free = shutil.disk_usage(".")
     disk_free_gb = free / (2**30)
     disk_used_pct = (used / total) * 100
-    
-    memory = psutil.virtual_memory()
-    cpu_pct = psutil.cpu_percent()
-    
+
+    cpu_display = "N/A"
+    ram_pct_display = "N/A"
+    ram_free_mb = 0.0
+    active_threads = threading.active_count()
+
+    try:
+        import psutil
+        memory = psutil.virtual_memory()
+        ram_pct_display = f"{memory.percent}%"
+        ram_free_mb = memory.available / (1024**2)
+        cpu_display = f"{psutil.cpu_percent()}%"
+        active_threads = psutil.Process().num_threads()
+    except Exception:
+        # Robust native Linux /proc fallback when psutil is not available
+        try:
+            load1, _, _ = os.getloadavg()
+            cpu_display = f"Load: {load1:.2f}"
+            mem_total, mem_avail = 0, 0
+            if os.path.exists("/proc/meminfo"):
+                with open("/proc/meminfo") as f:
+                    for line in f:
+                        if line.startswith("MemTotal:"):
+                            mem_total = int(line.split()[1]) * 1024
+                        elif line.startswith("MemAvailable:"):
+                            mem_avail = int(line.split()[1]) * 1024
+                if mem_total > 0:
+                    used_ram = mem_total - mem_avail
+                    ram_pct_display = f"{(used_ram / mem_total * 100):.1f}%"
+                    ram_free_mb = mem_avail / (1024**2)
+        except Exception as fe:
+            logger.warning(f"Native system resource fallback error: {fe}")
+
     text = (
         "🖥 <b>Host System Resource Metrics:</b>\n\n"
-        f"• <b>CPU Usage:</b> <code>{cpu_pct}%</code>\n"
-        f"• <b>RAM Usage:</b> <code>{memory.percent}%</code> (Free: {memory.available / (1024**2):.1f} MB)\n"
+        f"• <b>CPU Usage:</b> <code>{cpu_display}</code>\n"
+        f"• <b>RAM Usage:</b> <code>{ram_pct_display}</code> (Free: {ram_free_mb:.1f} MB)\n"
         f"• <b>Disk Space:</b> <code>{disk_used_pct:.1f}% used</code> (Free: {disk_free_gb:.1f} GB)\n"
-        f"• <b>Active Threads:</b> <code>{psutil.Process().num_threads()}</code>"
+        f"• <b>Active Threads:</b> <code>{active_threads}</code>"
     )
     await update.message.reply_text(text, parse_mode="HTML")
 

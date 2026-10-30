@@ -1,7 +1,8 @@
 import json
 import hashlib
+import asyncio
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Callable, Awaitable
 from sqlalchemy import select, func, desc
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
@@ -35,13 +36,17 @@ class JobService:
         """Generate a unique SHA-256 hash representing the job URL."""
         return hashlib.sha256(url.encode("utf-8")).hexdigest()
 
-    async def run_scraping_and_matching(self, target_user_id: Optional[int] = None) -> List[Tuple[int, Job]]:
-        """Runs scrapers, saves global Job records, and matches them against user CVs.
+    async def run_scraping_and_matching(
+        self,
+        target_user_id: Optional[int] = None,
+        progress_callback: Optional[Callable[[int, str, int], Awaitable[None]]] = None
+    ) -> List[Tuple[int, Job]]:
+        """Runs scrapers with self-healing recovery, saves global Job records, and matches them against user CVs.
         If target_user_id is provided, scrapes specifically using user's detected career keywords.
         Returns:
             List[Tuple[user_id, Job]] newly recommended jobs per user.
         """
-        logger.info(f"Starting job scraping and matching cycle (target_user_id: {target_user_id})")
+        logger.info(f"Starting self-healing job scraping and matching cycle (target_user_id: {target_user_id})")
         all_scraped_jobs: List[Dict[str, Any]] = []
 
         keywords = settings.keywords_list
@@ -62,25 +67,40 @@ class JobService:
 
         # Track scraper execution summary
         scraper_stats: Dict[str, Any] = {}
+        total_scrapers = len(self.scrapers)
 
-        # Run scrapers
-        for scraper in self.scrapers:
+        # Run scrapers with self-healing isolation
+        for idx, scraper in enumerate(self.scrapers):
             if getattr(scraper, "is_disabled", False):
                 scraper_stats[scraper.source_name] = "disabled (403)"
                 continue
+
+            current_pct = 10 + int((idx / max(1, total_scrapers)) * 60)
+            if progress_callback:
+                try:
+                    await progress_callback(
+                        current_pct,
+                        f"Memindai platform {scraper.source_name.capitalize()}...",
+                        len(all_scraped_jobs)
+                    )
+                except Exception as pe:
+                    logger.debug(f"Progress callback notification note: {pe}")
 
             scraper_jobs_found = 0
             for kw in keywords:
                 for loc in locations:
                     try:
                         logger.debug(f"Running {scraper.source_name} for '{kw}' in '{loc}'")
-                        jobs = await scraper.scrape(kw, loc)
+                        # 25s timeout per query with self-healing failover
+                        jobs = await asyncio.wait_for(scraper.scrape(kw, loc), timeout=25.0)
                         if jobs:
                             all_scraped_jobs.extend(jobs)
                             scraper_jobs_found += len(jobs)
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Self-healing: {scraper.source_name} timed out for '{kw}' in '{loc}'. Continuing progress...")
                     except Exception as e:
-                        logger.error(f"Error executing scraper {scraper.source_name} for '{kw}' in '{loc}': {e}", exc_info=True)
-            
+                        logger.error(f"Self-healing: Error executing {scraper.source_name} for '{kw}' in '{loc}': {e}. Continuing progress...")
+
             if getattr(scraper, "is_disabled", False):
                 scraper_stats[scraper.source_name] = "disabled (403)"
             else:
@@ -93,10 +113,20 @@ class JobService:
         for j in all_scraped_jobs:
             unique_scraped[j["url"]] = j
 
+        if progress_callback:
+            try:
+                await progress_callback(
+                    75,
+                    f"Deduplikasi & sinkronisasi {len(unique_scraped)} lowongan ke database...",
+                    len(unique_scraped)
+                )
+            except Exception:
+                pass
+
         newly_inserted_jobs: List[Job] = []
         duplicate_skips = 0
 
-        # 1. Global Job Insertion (Scrape once, store once)
+        # 1. Global Job Insertion (Scrape once, store once with row-level transaction isolation)
         async with async_session_maker() as session:
             for url, raw_job in unique_scraped.items():
                 job_key = self._generate_job_key(url)
@@ -144,14 +174,41 @@ class JobService:
                     duplicate_skips += 1
                     logger.debug(f"Duplicate job skipped: {raw_job['title']} at {raw_job['company']}")
                     continue
+                except Exception as insert_err:
+                    logger.warning(f"Self-healing: Skipped inserting malformed job {raw_job.get('title')}: {insert_err}")
+                    continue
 
             await session.commit()
 
         logger.info(f"Stored {len(newly_inserted_jobs)} new global jobs in database.")
 
-        if not newly_inserted_jobs:
+        # Self-healing fallback: If no newly inserted jobs (all duplicates), load recent database jobs for this user
+        jobs_to_match = newly_inserted_jobs
+        if not jobs_to_match and target_user_id:
+            logger.info("No newly crawled jobs inserted. Loading recent jobs from database for user matching...")
+            async with async_session_maker() as session:
+                recent_stmt = (
+                    select(Job)
+                    .options(selectinload(Job.ai_scores))
+                    .order_by(desc(Job.created_at))
+                    .limit(settings.MAX_JOBS_PER_RUN)
+                )
+                r_res = await session.execute(recent_stmt)
+                jobs_to_match = list(r_res.scalars().all())
+
+        if not jobs_to_match:
             self._log_structured_summary(scraper_stats, len(unique_scraped), duplicate_skips, 0)
             return []
+
+        if progress_callback:
+            try:
+                await progress_callback(
+                    85,
+                    f"Mengevaluasi kesesuaian profil CV dengan AI (OpenRouter)...",
+                    len(jobs_to_match)
+                )
+            except Exception:
+                pass
 
         # 2. User-Specific Matching (Perform matching afterwards)
         final_user_recommendations: List[Tuple[int, Job]] = []
@@ -183,7 +240,7 @@ class JobService:
                 cv_text = cv_profile.cv_text
                 logger.info(f"Processing AI matches for User ID: {uid}")
 
-                for job in newly_inserted_jobs[:settings.MAX_JOBS_PER_RUN]:
+                for job in jobs_to_match[:settings.MAX_JOBS_PER_RUN]:
                     try:
                         # Cache Check: Check if match score already exists in DB
                         cache_stmt = select(AIScore).where((AIScore.user_id == uid) & (AIScore.job_id == job.id))
@@ -272,11 +329,22 @@ class JobService:
     async def get_latest_jobs(self, user_id: int, limit: int = 10, recommended_only: bool = False) -> List[Job]:
         """Fetch newest jobs from database, populated with user-specific AI score matching."""
         async with async_session_maker() as session:
-            stmt = select(Job).outerjoin(AIScore, (Job.id == AIScore.job_id) & (AIScore.user_id == user_id)).options(selectinload(Job.ai_scores)).order_by(desc(Job.created_at))
-            
             if recommended_only:
-                stmt = stmt.join(AIScore, (Job.id == AIScore.job_id) & (AIScore.user_id == user_id)).where(AIScore.recommended.is_(True))
-                
+                stmt = (
+                    select(Job)
+                    .join(AIScore, (Job.id == AIScore.job_id) & (AIScore.user_id == user_id))
+                    .where(AIScore.recommended.is_(True))
+                    .options(selectinload(Job.ai_scores))
+                    .order_by(desc(Job.created_at))
+                )
+            else:
+                stmt = (
+                    select(Job)
+                    .outerjoin(AIScore, (Job.id == AIScore.job_id) & (AIScore.user_id == user_id))
+                    .options(selectinload(Job.ai_scores))
+                    .order_by(desc(Job.created_at))
+                )
+
             stmt = stmt.limit(limit)
             res = await session.execute(stmt)
             return list(res.scalars().all())

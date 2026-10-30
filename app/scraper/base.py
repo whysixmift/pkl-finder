@@ -21,7 +21,28 @@ class BaseScraper:
         self.source_name = source_name
         self.timeout = 15.0
         self.last_status_code: Optional[int] = None
-        self.is_disabled: bool = False
+        self._is_disabled: bool = False
+        self._disabled_until: Optional[float] = None
+
+    @property
+    def is_disabled(self) -> bool:
+        """Check if scraper is disabled, self-healing after cooldown expiration."""
+        import time
+        if self._disabled_until and time.time() > self._disabled_until:
+            self._is_disabled = False
+            self._disabled_until = None
+            logger.info(f"[{self.source_name}] Self-healing: Cooldown expired. Re-enabling scraper automatically.")
+        return self._is_disabled
+
+    @is_disabled.setter
+    def is_disabled(self, value: bool) -> None:
+        import time
+        self._is_disabled = value
+        if value:
+            # Self-healing: 5-minute cooldown instead of indefinite permanent shutdown
+            self._disabled_until = time.time() + 300.0
+        else:
+            self._disabled_until = None
 
     def get_random_headers(self) -> Dict[str, str]:
         """Generate headers with rotated user-agent and standard browser headers."""
