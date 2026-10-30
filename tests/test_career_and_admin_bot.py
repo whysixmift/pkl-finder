@@ -1,3 +1,4 @@
+import os
 import json
 import pytest
 from app.ai.evaluator import evaluator
@@ -145,3 +146,58 @@ async def test_get_latest_jobs_no_ambiguous_column():
         if j:
             await session.delete(j)
             await session.commit()
+
+@pytest.mark.asyncio
+async def test_self_healing_agent_patch_and_revert():
+    """Verify SelfHealingAgent code patching, diff calculation, and revert capabilities."""
+    from app.agents.self_healing_agent import self_healing_agent, get_project_root
+
+    root = get_project_root()
+    test_rel_path = "tests/temp_test_heal.py"
+    test_full_path = os.path.join(root, test_rel_path)
+
+    initial_content = "def calculate():\n    return 10 + 20\n"
+    with open(test_full_path, "w", encoding="utf-8") as f:
+        f.write(initial_content)
+
+    try:
+        # Test applying patch
+        target = "return 10 + 20"
+        replacement = "return (10 + 20) * 2"
+        success, diff, backup = await self_healing_agent.apply_code_patch(
+            file_path=test_rel_path,
+            target=target,
+            replacement=replacement
+        )
+        assert success is True
+        assert "-    return 10 + 20" in diff
+        assert "+    return (10 + 20) * 2" in diff
+
+        with open(test_full_path, "r", encoding="utf-8") as f:
+            patched = f.read()
+        assert "(10 + 20) * 2" in patched
+
+        # Test revert
+        await self_healing_agent.revert_file(test_rel_path, backup)
+        with open(test_full_path, "r", encoding="utf-8") as f:
+            restored = f.read()
+        assert restored == initial_content
+
+    finally:
+        if os.path.exists(test_full_path):
+            os.remove(test_full_path)
+
+@pytest.mark.asyncio
+async def test_self_healing_heuristic_fallback():
+    """Verify fallback patch generation for known issues."""
+    from app.ai.openrouter_provider import OpenRouterProvider
+    provider = OpenRouterProvider()
+
+    patch = provider._fallback_generate_patch("No module named 'psutil'", "ImportError: No module named 'psutil'")
+    assert "psutil" in patch["file_path"] or "handlers.py" in patch["file_path"]
+    assert "import psutil" in patch["target"]
+    assert "try:" in patch["replacement"]
+
+    patch_sql = provider._fallback_generate_patch("ambiguous column name", "sqlite3.OperationalError")
+    assert "job_service.py" in patch_sql["file_path"]
+    assert "join" in patch_sql["target"]

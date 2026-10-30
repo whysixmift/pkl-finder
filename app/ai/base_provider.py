@@ -45,3 +45,13 @@ class BaseLLMProvider(ABC):
     async def analyze_cv_intelligence(self, cv_text: str) -> dict:
         """Analyze candidate CV to detect suitable job roles, top skills, and scraper search queries."""
         return {}
+
+    async def generate_code_patch(
+        self,
+        bug_report: str,
+        log_context: str,
+        code_context: str,
+        file_hint: Optional[str] = None
+    ) -> dict:
+        """Analyze bug report and code context, returning a surgical code fix dictionary."""
+        return {}

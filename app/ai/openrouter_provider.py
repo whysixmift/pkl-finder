@@ -497,3 +497,108 @@ class OpenRouterProvider(BaseLLMProvider):
             work_mode="Remote" if "remote" in desc_lower else "On-site",
             priority="high" if score >= 80 else "medium"
         )
+
+    async def generate_code_patch(
+        self,
+        bug_report: str,
+        log_context: str,
+        code_context: str,
+        file_hint: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Analyze bug report and code context, returning a surgical code fix dictionary."""
+        system_prompt = (
+            "You are an expert autonomous software engineer and debugging specialist for a Python project.\n"
+            "Given the bug report, recent error logs, and relevant source code snippet, identify the root cause "
+            "and produce a surgical, minimal fix that solves the bug without breaking existing functionality.\n\n"
+            "Strict Instructions:\n"
+            "1. Output MUST be ONLY a valid JSON object.\n"
+            "2. 'file_path': The relative file path to edit (e.g., 'app/bot/handlers.py').\n"
+            "3. 'target': The EXACT character-for-character substring in the file that must be replaced. "
+            "It must match the source file exactly, including whitespace and indentation.\n"
+            "4. 'replacement': The replacement code.\n"
+            "5. 'diagnosis': A clear, concise explanation of the bug and its root cause in Indonesian.\n"
+            "6. 'explanation': A summary of what the fix does in Indonesian.\n\n"
+            "Response Schema:\n"
+            "{\n"
+            '  "file_path": "path/to/file.py",\n'
+            '  "target": "exact text to replace",\n'
+            '  "replacement": "new replacement text",\n'
+            '  "diagnosis": "penjelasan akar masalah",\n'
+            '  "explanation": "penjelasan perbaikan"\n'
+            "}"
+        )
+
+        user_prompt = (
+            f"=== LAPORAN BUG / ISSUE ===\n{bug_report}\n\n"
+            f"=== RECENT ERROR LOGS ===\n{log_context[:2500]}\n\n"
+            f"=== SOURCE CODE CONTEXT ===\n{code_context[:4000]}\n\n"
+            f"Target File Hint: {file_hint or 'Detect from error'}\n\n"
+            "Generate the surgical JSON fix."
+        )
+
+        def payload_factory(model_id: str) -> Dict[str, Any]:
+            return {
+                "model": model_id,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "response_format": {"type": "json_object"},
+                "stream": False
+            }
+
+        try:
+            data = await self._post_with_fallback(payload_factory)
+            content = data["choices"][0]["message"]["content"].strip()
+            if content.startswith("```"):
+                match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", content)
+                if match:
+                    content = match.group(1)
+            parsed = json.loads(content)
+            return {
+                "file_path": parsed.get("file_path", file_hint or ""),
+                "target": parsed.get("target", ""),
+                "replacement": parsed.get("replacement", ""),
+                "diagnosis": parsed.get("diagnosis", "Diagnosa bug otomatis"),
+                "explanation": parsed.get("explanation", "Perbaikan otomatis diterapkan")
+            }
+        except Exception as e:
+            logger.warning(f"AI code patch generation failed ({e}), attempting rule-based fallback.")
+            return self._fallback_generate_patch(bug_report, log_context, file_hint)
+
+    def _fallback_generate_patch(
+        self,
+        bug_report: str,
+        log_context: str,
+        file_hint: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Rule-based heuristic fallback patch generation when OpenRouter is offline."""
+        combined = f"{bug_report}\n{log_context}".lower()
+
+        # Rule 1: psutil import missing
+        if "psutil" in combined:
+            return {
+                "file_path": file_hint or "app/bot/handlers.py",
+                "target": "import psutil",
+                "replacement": "try:\n        import psutil\n    except Exception:\n        psutil = None",
+                "diagnosis": "Modul 'psutil' belum terpasang atau tidak tersedia di container/host.",
+                "explanation": "Membungkus import psutil dengan blok try-except fallback."
+            }
+
+        # Rule 2: Ambiguous column name in query
+        if "ambiguous column" in combined:
+            return {
+                "file_path": file_hint or "app/services/job_service.py",
+                "target": "stmt.join(AIScore, (Job.id == AIScore.job_id) & (AIScore.user_id == user_id))",
+                "replacement": "# Duplicate join removed to eliminate ambiguous column name",
+                "diagnosis": "Terjadi duplikasi join pada AIScore yang menyebabkan ambigu pada nama kolom SQLite.",
+                "explanation": "Menghapus duplikasi join pada AIScore."
+            }
+
+        return {
+            "file_path": file_hint or "",
+            "target": "",
+            "replacement": "",
+            "diagnosis": "Tidak dapat merumuskan patch otomatis tanpa koneksi AI aktif.",
+            "explanation": "Koneksi OpenRouter terputus dan tidak ada aturan rule-based yang cocok."
+        }

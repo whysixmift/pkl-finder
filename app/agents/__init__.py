@@ -7,6 +7,7 @@ from app.agents.email_drafting_agent import EmailDraftingAgent, email_drafting_a
 from app.agents.email_dispatch_agent import EmailDispatchAgent, email_dispatch_agent
 from app.agents.access_control_agent import AccessControlAgent, access_control_agent
 from app.agents.scheduler_agent import SchedulerAgent, scheduler_agent
+from app.agents.self_healing_agent import SelfHealingAgent, self_healing_agent
 
 __all__ = [
     "BaseAgent",
@@ -26,4 +27,6 @@ __all__ = [
     "access_control_agent",
     "SchedulerAgent",
     "scheduler_agent",
+    "SelfHealingAgent",
+    "self_healing_agent",
 ]
