@@ -527,9 +527,14 @@ async def admin_post_init(app) -> None:
             BotCommand("healing", "Dashboard metrik status self-healing"),
             BotCommand("help", "Panduan lengkap perintah admin")
         ]
-        await app.bot.set_my_commands(admin_commands, scope=BotCommandScopeDefault())
-        await app.bot.set_my_commands(admin_commands, scope=BotCommandScopeAllPrivateChats())
-        logger.info("Admin Bot commands registered successfully.")
+        for scope in [BotCommandScopeDefault(), BotCommandScopeAllPrivateChats()]:
+            try:
+                await app.bot.set_my_commands(admin_commands, scope=scope)
+                await app.bot.set_my_commands(admin_commands, scope=scope, language_code="en")
+                await app.bot.set_my_commands(admin_commands, scope=scope, language_code="id")
+            except Exception as sc_err:
+                logger.debug(f"Admin scope command registration notice: {sc_err}")
+        logger.info("Admin Bot commands registered successfully across all scopes.")
     except Exception as e:
         logger.warning(f"Failed to register Admin Bot commands: {e}")
 

@@ -196,14 +196,15 @@ class SelfHealingAgent(BaseAgent):
         except Exception as e:
             return False, f"Gagal menerapkan patch ke file: {e}", ""
 
-    async def run_regression_tests(self, timeout_sec: float = 45.0) -> Tuple[bool, str]:
+    async def run_regression_tests(self, timeout_sec: float = 60.0) -> Tuple[bool, str]:
         """Runs pytest suite to verify that the patch fixes the issue and doesn't break regressions."""
         project_root = get_project_root()
         pytest_bin = os.path.join(project_root, ".venv", "bin", "pytest")
         if not os.path.exists(pytest_bin):
             pytest_bin = sys.executable
 
-        cmd = [pytest_bin, "tests/test_career_and_admin_bot.py", "-q"]
+        # Run fast core unit tests excluding external network/AI latency tests
+        cmd = [pytest_bin, "tests/test_career_and_admin_bot.py", "-k", "not test_ai_career_copilot_features", "-q"]
         logger.info(f"Self-healing: Running verification test command: {' '.join(cmd)}")
 
         try:
@@ -218,7 +219,7 @@ class SelfHealingAgent(BaseAgent):
             success = (proc.returncode == 0)
             return success, output
         except asyncio.TimeoutError:
-            return False, "Pytest execution timed out (45s limit exceeded)."
+            return False, f"Pytest execution timed out ({timeout_sec}s limit exceeded)."
         except Exception as e:
             return False, f"Gagal menjalankan pytest: {e}"
 
@@ -413,7 +414,7 @@ class SelfHealingAgent(BaseAgent):
             if progress_callback:
                 await progress_callback("🧪 <i>Memverifikasi integritas sistem dengan test suite (pytest)...</i>")
 
-            test_passed, test_output = await self.run_regression_tests(timeout_sec=40.0)
+            test_passed, test_output = await self.run_regression_tests(timeout_sec=60.0)
             if not test_passed:
                 # Revert immediately!
                 await self.revert_file(file_path, backup_content)

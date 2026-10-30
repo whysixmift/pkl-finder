@@ -65,46 +65,66 @@ class JobService:
                     except Exception as e:
                         logger.warning(f"Failed to parse user search_keywords: {e}")
 
+        # Optimize search scope for on-demand user searches vs global background crawling
+        if target_user_id:
+            keywords = keywords[:3] if keywords else settings.keywords_list[:2]
+            preferred_locs = [l for l in locations if l.lower() in ["remote", "jakarta", "indonesia"]]
+            locations = preferred_locs[:2] if preferred_locs else locations[:2]
+        else:
+            keywords = keywords[:5]
+            locations = locations[:4]
+
         # Track scraper execution summary
         scraper_stats: Dict[str, Any] = {}
         total_scrapers = len(self.scrapers)
 
-        # Run scrapers with self-healing isolation
-        for idx, scraper in enumerate(self.scrapers):
+        # Run scrapers concurrently with Semaphore-based worker pool for max speed
+        sem = asyncio.Semaphore(5)
+
+        async def fetch_job_batch(scraper_inst, kw_query, loc_query):
+            async with sem:
+                try:
+                    logger.debug(f"Running {scraper_inst.source_name} for '{kw_query}' in '{loc_query}'")
+                    jobs_res = await asyncio.wait_for(scraper_inst.scrape(kw_query, loc_query), timeout=18.0)
+                    return scraper_inst.source_name, jobs_res or []
+                except asyncio.TimeoutError:
+                    logger.warning(f"Self-healing: {scraper_inst.source_name} timed out for '{kw_query}' in '{loc_query}'. Continuing...")
+                    return scraper_inst.source_name, []
+                except Exception as ex:
+                    logger.error(f"Self-healing: Error executing {scraper_inst.source_name} for '{kw_query}' in '{loc_query}': {ex}")
+                    return scraper_inst.source_name, []
+
+        scrape_tasks = []
+        for scraper in self.scrapers:
             if getattr(scraper, "is_disabled", False):
                 scraper_stats[scraper.source_name] = "disabled (403)"
                 continue
+            for kw in keywords:
+                for loc in locations:
+                    scrape_tasks.append(fetch_job_batch(scraper, kw, loc))
 
-            current_pct = 10 + int((idx / max(1, total_scrapers)) * 60)
+        total_tasks = len(scrape_tasks)
+        completed_tasks = 0
+
+        for coro in asyncio.as_completed(scrape_tasks):
+            src_name, jobs = await coro
+            completed_tasks += 1
+            if jobs:
+                all_scraped_jobs.extend(jobs)
+                scraper_stats[src_name] = f"{len(jobs)} jobs"
+            elif src_name not in scraper_stats:
+                scraper_stats[src_name] = "0 jobs"
+            
+            current_pct = 10 + int((completed_tasks / max(1, total_tasks)) * 55)
             if progress_callback:
                 try:
                     await progress_callback(
                         current_pct,
-                        f"Memindai platform {scraper.source_name.capitalize()}...",
+                        f"Memindai platform lowongan ({completed_tasks}/{total_tasks} kueri selesai)...",
                         len(all_scraped_jobs)
                     )
-                except Exception as pe:
-                    logger.debug(f"Progress callback notification note: {pe}")
-
-            scraper_jobs_found = 0
-            for kw in keywords:
-                for loc in locations:
-                    try:
-                        logger.debug(f"Running {scraper.source_name} for '{kw}' in '{loc}'")
-                        # 25s timeout per query with self-healing failover
-                        jobs = await asyncio.wait_for(scraper.scrape(kw, loc), timeout=25.0)
-                        if jobs:
-                            all_scraped_jobs.extend(jobs)
-                            scraper_jobs_found += len(jobs)
-                    except asyncio.TimeoutError:
-                        logger.warning(f"Self-healing: {scraper.source_name} timed out for '{kw}' in '{loc}'. Continuing progress...")
-                    except Exception as e:
-                        logger.error(f"Self-healing: Error executing {scraper.source_name} for '{kw}' in '{loc}': {e}. Continuing progress...")
-
-            if getattr(scraper, "is_disabled", False):
-                scraper_stats[scraper.source_name] = "disabled (403)"
-            else:
-                scraper_stats[scraper.source_name] = f"{scraper_jobs_found} jobs"
+                except Exception:
+                    pass
 
         logger.info(f"Total jobs crawled from all sources before deduplication: {len(all_scraped_jobs)}")
 
@@ -191,7 +211,7 @@ class JobService:
                     select(Job)
                     .options(selectinload(Job.ai_scores))
                     .order_by(desc(Job.created_at))
-                    .limit(settings.MAX_JOBS_PER_RUN)
+                    .limit(10 if target_user_id else settings.MAX_JOBS_PER_RUN)
                 )
                 r_res = await session.execute(recent_stmt)
                 jobs_to_match = list(r_res.scalars().all())
@@ -199,6 +219,9 @@ class JobService:
         if not jobs_to_match:
             self._log_structured_summary(scraper_stats, len(unique_scraped), duplicate_skips, 0)
             return []
+
+        match_limit = 8 if target_user_id else settings.MAX_JOBS_PER_RUN
+        jobs_to_match = jobs_to_match[:match_limit]
 
         if progress_callback:
             try:
@@ -300,6 +323,16 @@ class JobService:
                         session.add(history)
 
             await session.commit()
+
+        if progress_callback:
+            try:
+                await progress_callback(
+                    95,
+                    f"Menyusun kartu lowongan rekomendasi terbaik...",
+                    len(final_user_recommendations)
+                )
+            except Exception:
+                pass
 
         # Eager load relationships before returning
         async with async_session_maker() as session:

@@ -13,7 +13,7 @@ from telegram.ext import ContextTypes, CommandHandler, MessageHandler, CallbackQ
 
 from app.config.settings import settings
 from app.database.db import async_session_maker
-from app.database.models import Job, Company, EmailQueue, Portfolio, CoverLetter, AIScore
+from app.database.models import Job, Company, EmailQueue, Portfolio, CoverLetter, AIScore, Favorite
 from app.services.cv_service import cv_service
 from app.services.email_service import email_service
 from app.services.job_service import JobService
@@ -417,41 +417,58 @@ async def run_background_user_scraping(
             (95, "Menyusun kartu lowongan rekomendasi..."),
         ]
         
-        step = 0
+        last_rendered_pct = -1
+        last_render_time = time.time()
+        
         while not scrape_task.done():
-            await asyncio.sleep(15)
+            await asyncio.sleep(3)
             if scrape_task.done():
                 break
 
             elapsed = int(time.time() - start_time)
-            stage_pct, stage_desc = stages[min(step, len(stages) - 1)]
-            effective_pct = max(current_state["percent"], stage_pct)
-            effective_pct = min(effective_pct, 95)
-            effective_desc = current_state["status"] if current_state["status"] != "Memindai lowongan di berbagai platform..." else stage_desc
-            step += 1
+            # Timeout guard: if scraping takes longer than 65s, break out and fetch DB matches
+            if elapsed > 65:
+                logger.warning(f"User {user_id} search exceeded 65s timeout. Falling back to DB results.")
+                break
 
-            count_info = f" ({current_state['jobs_count']} lowongan)" if current_state["jobs_count"] > 0 else ""
-            bar = render_progress_bar(effective_pct)
-            updated_text = (
-                f"🔄 <b>Pencarian Lowongan Kerja Sedang Berjalan...</b>\n\n"
-                f"🎯 <b>Target:</b> {html.escape(roles_str)}\n"
-                f"📊 <b>Progress:</b> <code>{bar}</code>\n"
-                f"🌐 <b>Aktivitas:</b> {html.escape(effective_desc)}{count_info}\n"
-                f"⏱️ <b>Waktu:</b> {elapsed} detik\n\n"
-                f"💡 <i>Anda dapat tetap mengirim perintah (/help, /profile, /settings, dll) tanpa mengganggu proses scraping ini!</i>"
-            )
-            try:
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=progress_msg_id,
-                    text=updated_text,
-                    parse_mode="HTML"
+            effective_pct = max(current_state["percent"], min(95, 15 + (elapsed * 2)))
+            effective_desc = current_state["status"]
+
+            now = time.time()
+            if effective_pct != last_rendered_pct or (now - last_render_time) >= 4.0:
+                last_rendered_pct = effective_pct
+                last_render_time = now
+                count_info = f" ({current_state['jobs_count']} lowongan)" if current_state["jobs_count"] > 0 else ""
+                bar = render_progress_bar(effective_pct)
+                updated_text = (
+                    f"🔄 <b>Pencarian Lowongan Kerja Sedang Berjalan...</b>\n\n"
+                    f"🎯 <b>Target:</b> {html.escape(roles_str)}\n"
+                    f"📊 <b>Progress:</b> <code>{bar}</code>\n"
+                    f"🌐 <b>Aktivitas:</b> {html.escape(effective_desc)}{count_info}\n"
+                    f"⏱️ <b>Waktu:</b> {elapsed} detik\n\n"
+                    f"💡 <i>Anda dapat tetap mengirim perintah (/help, /profile, /settings, dll) tanpa mengganggu proses scraping ini!</i>"
                 )
-            except Exception as edit_err:
-                logger.debug(f"Progress update notification note: {edit_err}")
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=progress_msg_id,
+                        text=updated_text,
+                        parse_mode="HTML"
+                    )
+                except Exception as edit_err:
+                    logger.debug(f"Progress update notification note: {edit_err}")
 
-        # Task finished
-        new_jobs = await scrape_task
+        # Task finished or timeout reached
+        new_jobs = []
+        try:
+            if scrape_task.done():
+                new_jobs = scrape_task.result()
+            else:
+                new_jobs = await asyncio.wait_for(scrape_task, timeout=10.0)
+        except Exception as task_err:
+            logger.warning(f"Search task resolution note for user {user_id}: {task_err}")
+            new_jobs = []
+
         elapsed = int(time.time() - start_time)
 
         # Trigger company discovery in background
@@ -460,7 +477,7 @@ async def run_background_user_scraping(
         except Exception:
             pass
 
-        user_recs = [job for uid, job in new_jobs if uid == user_id]
+        user_recs = [job for uid, job in new_jobs if uid == user_id] if new_jobs else []
 
         if user_recs:
             finished_bar = render_progress_bar(100)
@@ -676,10 +693,12 @@ async def profile_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"🌐 <b>Portfolio:</b> <code>{portfolio_display}</code>\n"
         f"✍️ <b>Template Cover Letter:</b> <i>{cl_display}</i>"
     )
-    await update.message.reply_text(profile_text, parse_mode="HTML")
+    target_msg = update.effective_message or update.message
+    await target_msg.reply_text(profile_text, parse_mode="HTML")
 
 @error_boundary
 async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    target_msg = update.effective_message or update.message
     config_text = (
         "⚙️ <b>Konfigurasi Sistem Aktif (Global):</b>\n\n"
         f"🔑 OpenRouter Model: <code>{settings.OPENROUTER_MODEL}</code>\n"
@@ -689,45 +708,48 @@ async def settings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         f"🔍 Lokasi Target: <code>{settings.SEARCH_LOCATIONS}</code>\n"
         f"🏷 Keyword Target: <code>{settings.SEARCH_KEYWORDS}</code>"
     )
-    await update.message.reply_text(config_text, parse_mode="HTML")
+    await target_msg.reply_text(config_text, parse_mode="HTML")
 
 @error_boundary
 @whitelist_required
 async def favorites_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+    target_msg = update.effective_message or update.message
     jobs = await job_service.get_favorites(user_id=user_id)
     if not jobs:
-        await update.message.reply_text("⭐ Belum ada lowongan terfavorit.")
+        await target_msg.reply_text("⭐ Belum ada lowongan terfavorit.")
         return
         
-    await update.message.reply_text("⭐ <b>Lowongan Terfavorit Anda:</b>", parse_mode="HTML")
+    await target_msg.reply_text("⭐ <b>Lowongan Terfavorit Anda:</b>", parse_mode="HTML")
     for job in jobs:
         text = format_job_message(job, user_id)
         keyboard = get_job_keyboard(job, is_fav=True)
-        await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
+        await target_msg.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 @error_boundary
 @whitelist_required
 async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+    target_msg = update.effective_message or update.message
     history = await job_service.get_history(user_id=user_id, limit=10)
     if not history:
-        await update.message.reply_text("📭 Riwayat aksi kosong.")
+        await target_msg.reply_text("📭 Riwayat aksi kosong.")
         return
         
     text = "📋 <b>Riwayat Aksi Terakhir Anda:</b>\n\n"
     for job, hist in history:
         text += f"• <code>[{hist.created_at.strftime('%d/%m %H:%M')}]</code> {job.company_name} - {job.title}: <b>{hist.action.upper()}</b> ({hist.details or ''})\n"
         
-    await update.message.reply_text(text, parse_mode="HTML")
+    await target_msg.reply_text(text, parse_mode="HTML")
 
 @error_boundary
 @whitelist_required
 async def recheck_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
-    await update.message.reply_text("🔄 <i>Memulai evaluasi ulang semua lowongan terhadap CV aktif...</i>", parse_mode="HTML")
+    target_msg = update.effective_message or update.message
+    await target_msg.reply_text("🔄 <i>Memulai evaluasi ulang semua lowongan terhadap CV aktif...</i>", parse_mode="HTML")
     newly_recommended = await job_service.recheck_all_jobs(user_id=user_id)
-    await update.message.reply_text(f"✅ Evaluasi ulang selesai! {len(newly_recommended)} lowongan kini direkomendasikan.")
+    await target_msg.reply_text(f"✅ Evaluasi ulang selesai! {len(newly_recommended)} lowongan kini direkomendasikan.")
 
 @error_boundary
 @whitelist_required
@@ -887,14 +909,21 @@ async def migrations_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 @error_boundary
 async def schema_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Verifies that the database schema precisely matches the SQLAlchemy ORM models."""
-    from app.database.migrations import verify_database_schema
-    await update.message.reply_text("🔍 <i>Memverifikasi skema database terhadap ORM metadata...</i>", parse_mode="HTML")
-    
-    success = verify_database_schema()
-    if success:
-        await update.message.reply_text("🟢 <b>Integritas Skema: OK</b>\nSemua tabel, kolom, index, dan constraint tervalidasi dengan benar.", parse_mode="HTML")
-    else:
-        await update.message.reply_text("🔴 <b>Peringatan Integritas Skema: MISMATCH</b>\nTerdapat ketidaksesuaian antara skema database aktual dan model ORM.", parse_mode="HTML")
+    target_msg = update.effective_message or update.message
+    await target_msg.reply_text("🔍 <i>Memverifikasi skema database terhadap ORM metadata...</i>", parse_mode="HTML")
+    from sqlalchemy import create_engine
+    from app.database.schema_audit import perform_schema_audit
+    sync_url = settings.DATABASE_URL.replace("sqlite+aiosqlite:///", "sqlite:///")
+    sync_engine = create_engine(sync_url)
+    try:
+        success, report = perform_schema_audit(sync_engine)
+        if success:
+            await target_msg.reply_text("🟢 <b>Integritas Skema: OK</b>\nSemua tabel, kolom, index, dan constraint tervalidasi dengan benar.", parse_mode="HTML")
+        else:
+            err_preview = "\n".join(report[:6])
+            await target_msg.reply_text(f"🔴 <b>Peringatan Integritas Skema: MISMATCH</b>\n<code>{html.escape(err_preview)}</code>", parse_mode="HTML")
+    finally:
+        sync_engine.dispose()
 
 @admin_only
 @error_boundary
@@ -1156,16 +1185,17 @@ async def heal_cmd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def queue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List pending drafts in the user's approval queue."""
     user_id = update.effective_user.id
+    target_msg = update.effective_message or update.message
     async with async_session_maker() as session:
         stmt = select(EmailQueue).options(selectinload(EmailQueue.company)).where((EmailQueue.status == "draft") & (EmailQueue.user_id == user_id)).limit(5)
         res = await session.execute(stmt)
         drafts = res.scalars().all()
 
         if not drafts:
-            await update.message.reply_text("📭 Antrean draft email kosong.")
+            await target_msg.reply_text("📭 Antrean draft email kosong.")
             return
 
-        await update.message.reply_text(f"✉️ <b>Daftar Draft Email Pending ({len(drafts)} pertama):</b>", parse_mode="HTML")
+        await target_msg.reply_text(f"✉️ <b>Daftar Draft Email Pending ({len(drafts)} pertama):</b>", parse_mode="HTML")
         for draft in drafts:
             att_text = "📎 <b>Lampiran:</b> CV Terlampir (.PDF / .DOCX)\n" if draft.attachments else "📎 <b>Lampiran:</b> Tidak ada lampiran\n"
             text = (
@@ -1187,19 +1217,20 @@ async def queue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
+            await target_msg.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
 
 @error_boundary
 @whitelist_required
 async def sendall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
-    await update.message.reply_text("⏳ <i>Mulai mendispatch semua email approved...</i>", parse_mode="HTML")
+    target_msg = update.effective_message or update.message
+    await target_msg.reply_text("⏳ <i>Mulai mendispatch semua email approved...</i>", parse_mode="HTML")
     from app.agents.email_dispatch_agent import email_dispatch_agent
     res = await email_dispatch_agent.dispatch_approved_queue(user_id=user_id)
     sent_count = res.get("sent", 0)
     failed_count = res.get("failed", 0)
 
-    await update.message.reply_text(
+    await target_msg.reply_text(
         f"✅ <b>Dispatch Antrean Selesai!</b>\n- Terkirim: <code>{sent_count}</code>\n- Gagal: <code>{failed_count}</code>",
         parse_mode="HTML"
     )
@@ -1207,13 +1238,14 @@ async def sendall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 @error_boundary
 @whitelist_required
 async def companies_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    target_msg = update.effective_message or update.message
     async with async_session_maker() as session:
         stmt = select(Company).limit(15)
         res = await session.execute(stmt)
         companies = res.scalars().all()
         
         if not companies:
-            await update.message.reply_text("📭 Tidak ada perusahaan terdaftar.")
+            await target_msg.reply_text("📭 Tidak ada perusahaan terdaftar.")
             return
             
         comp_text = "🏢 <b>Daftar Perusahaan Diselidiki (Global):</b>\n\n"
@@ -1221,7 +1253,7 @@ async def companies_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             status = "📧" if comp.recruitment_email else "🌐"
             comp_text += f"{status} {comp.name} (<a href='{comp.website}'>Website</a>)\n"
             
-        await update.message.reply_text(comp_text, parse_mode="HTML", disable_web_page_preview=True)
+        await target_msg.reply_text(comp_text, parse_mode="HTML", disable_web_page_preview=True)
 
 @error_boundary
 @whitelist_required
@@ -1931,6 +1963,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def connect_google_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send Google SSO OAuth authorization URL to user for Gmail API email sending."""
     user_id = update.effective_user.id
+    target_msg = update.effective_message or update.message
     from app.services.google_auth_service import google_auth_service
     auth_url = google_auth_service.get_authorization_url(user_id)
 
@@ -1940,12 +1973,12 @@ async def connect_google_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     text = (
         "🔐 <b>Login Email Menggunakan Google SSO (Gmail API)</b>\n\n"
-        "Klik tombol di bawah untuk mengizinkan bot PKL Finder mengirim email lamaran magang Anda "
+        "Klik tombol di bawah untuk mengizinkan bot mengirim email lamaran kerja Anda "
         "secara langsung melalui akun Google Anda dengan lampiran CV lengkap.\n\n"
         f"🔗 <b>Atau buka URL ini di browser Anda:</b>\n<code>{auth_url}</code>\n\n"
         "<i>Setelah selesai login di browser, bot akan otomatis terhubung!</i>"
     )
-    await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await target_msg.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 @error_boundary
 @whitelist_required
@@ -1978,7 +2011,8 @@ async def email_handler_fallback(update: Update, context: ContextTypes.DEFAULT_T
             "2. <b>SMTP Manual:</b> Jalankan /credentials untuk mengatur kredensial SMTP."
         )
 
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    target_msg = update.effective_message or update.message
+    await target_msg.reply_text("\n".join(lines), parse_mode="HTML")
 
 @admin_only
 @error_boundary
@@ -2001,7 +2035,8 @@ async def agents_status_handler(update: Update, context: ContextTypes.DEFAULT_TY
             f"   • Fitur: <i>{st['feature']}</i>\n"
             f"   • Runs: <code>{st['total_runs']}</code> | Dur: <code>{st['duration_sec']}s</code>\n"
         )
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    target_msg = update.effective_message or update.message
+    await target_msg.reply_text("\n".join(lines), parse_mode="HTML")
 
 def setup_bot(application) -> None:
     """Registers all commands and handlers with the PTB Application."""

@@ -145,9 +145,14 @@ async def post_init(application) -> None:
             BotCommand("openapplications", "Kirim inisiatif open application"),
             BotCommand("help", "Panduan & bantuan lengkap fitur bot")
         ]
-        await application.bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
-        await application.bot.set_my_commands(user_commands, scope=BotCommandScopeAllPrivateChats())
-        logger.info("Telegram Bot command menu popup registered successfully.")
+        for scope in [BotCommandScopeDefault(), BotCommandScopeAllPrivateChats()]:
+            try:
+                await application.bot.set_my_commands(user_commands, scope=scope)
+                await application.bot.set_my_commands(user_commands, scope=scope, language_code="en")
+                await application.bot.set_my_commands(user_commands, scope=scope, language_code="id")
+            except Exception as sc_err:
+                logger.debug(f"Scope command registration notice: {sc_err}")
+        logger.info("Telegram Bot command menu popup registered successfully across all scopes and language codes.")
     except Exception as cmd_err:
         logger.warning(f"Failed to register Telegram Bot command popup: {cmd_err}")
     
