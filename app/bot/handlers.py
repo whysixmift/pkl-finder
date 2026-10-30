@@ -1013,6 +1013,76 @@ async def logs_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except Exception as e:
         await update.message.reply_text(f"❌ Gagal membaca file log: {e}")
 
+@admin_only
+@error_boundary
+async def heal_cmd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manual command: /heal or /fix <bug description> in User Bot."""
+    from app.agents.self_healing_agent import self_healing_agent
+    target_msg = update.effective_message
+    if not target_msg:
+        return
+
+    bug_report = " ".join(context.args) if context.args else ""
+    if not bug_report:
+        recent_logs = self_healing_agent.get_recent_error_logs(max_lines=25)
+        if not recent_logs.strip():
+            await target_msg.reply_text(
+                "🩺 <b>Self-Healing System Siap</b>\n\n"
+                "Log error saat ini kosong. Untuk lapor bug spesifik, gunakan:\n"
+                "<code>/fix &lt;deskripsi bug yang dialami&gt;</code>",
+                parse_mode="HTML"
+            )
+            return
+        bug_report = f"Terjadi kendala error pada log sistem:\n{recent_logs}"
+
+    status_msg = await target_msg.reply_text(
+        "🛠️ <b>Memulai Protokol Self-Healing...</b>\n\n"
+        "🔍 <i>Menganalisis laporan & memeriksa log...</i>",
+        parse_mode="HTML"
+    )
+
+    async def update_progress(desc: str) -> None:
+        try:
+            await status_msg.edit_text(
+                f"🛠️ <b>Self-Healing Sedang Berjalan...</b>\n\n{desc}",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
+    result = await self_healing_agent.diagnose_and_heal(
+        bug_report=bug_report,
+        progress_callback=update_progress
+    )
+
+    if result.get("success"):
+        commit_hash = result.get("commit_hash") or "latest"
+        diff_preview = result.get("diff", "")[:900]
+        escaped_diff = html.escape(diff_preview) if diff_preview else "Perubahan file terverifikasi"
+        escaped_diag = html.escape(result.get("diagnosis", ""))
+        escaped_expl = html.escape(result.get("explanation", ""))
+        test_out = html.escape(result.get("test_output", "")[:250])
+
+        report_text = (
+            "✅ <b>Self-Healing Berhasil & Dideploy!</b>\n\n"
+            f"🎯 <b>Diagnosa:</b>\n<i>{escaped_diag}</i>\n\n"
+            f"🔧 <b>Perbaikan:</b> <i>{escaped_expl}</i>\n"
+            f"📁 <b>File:</b> <code>{result.get('file_path')}</code>\n"
+            f"🔖 <b>Commit Git:</b> <code>{commit_hash}</code>\n\n"
+            f"📝 <b>Diff Patch:</b>\n<pre><code>{escaped_diff}</code></pre>\n\n"
+            f"🧪 <b>Hasil Test:</b>\n<code>{test_out}</code>\n\n"
+            "🚀 <b>Deployment:</b> Kode diterapkan & service <code>pkl-finder</code> direload otomatis."
+        )
+        await status_msg.edit_text(report_text, parse_mode="HTML")
+    else:
+        err_msg = html.escape(result.get("error", "Unknown error"))
+        report_text = (
+            "❌ <b>Self-Healing Tidak Berhasil</b>\n\n"
+            f"⚠️ <b>Kendala:</b> <code>{err_msg}</code>\n\n"
+            "🛡️ <i>Semua perubahan telah dibatalkan (auto-reverted).</i>"
+        )
+        await status_msg.edit_text(report_text, parse_mode="HTML")
+
 # ----------------- EMAIL QUEUE ACTIONS -----------------
 
 @error_boundary
@@ -1573,9 +1643,10 @@ def setup_bot(application) -> None:
     application.add_handler(CommandHandler("sendall", sendall_handler))
     
     # System configs / logs / stats / health
-    application.add_handler(CommandHandler("stats", stats_handler))
+    application.add_handler(CommandHandler(["stats", "stat"], stats_handler))
     application.add_handler(CommandHandler("health", health_handler))
-    application.add_handler(CommandHandler("logs", logs_handler))
+    application.add_handler(CommandHandler(["logs", "log"], logs_handler))
+    application.add_handler(CommandHandler(["heal", "fix", "selfheal"], heal_cmd_handler))
     application.add_handler(CommandHandler("settings", settings_handler))
     application.add_handler(CommandHandler("favorites", favorites_handler))
     application.add_handler(CommandHandler("history", history_handler))

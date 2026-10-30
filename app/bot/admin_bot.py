@@ -497,24 +497,22 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 def setup_admin_bot(app) -> None:
     """Register all command and callback handlers for Admin Bot."""
-    app.add_handler(CommandHandler("start", start_handler))
-    app.add_handler(CommandHandler("help", start_handler))
+    app.add_handler(CommandHandler(["start", "help", "menu"], start_handler))
     app.add_handler(CommandHandler("pending", pending_handler))
     app.add_handler(CommandHandler("users", users_handler))
-    app.add_handler(CommandHandler("stats", stats_handler))
+    app.add_handler(CommandHandler(["stats", "stat"], stats_handler))
     app.add_handler(CommandHandler("scrape", scrape_handler))
     app.add_handler(CommandHandler("approve", approve_cmd_handler))
     app.add_handler(CommandHandler("reject", reject_cmd_handler))
-    app.add_handler(CommandHandler("heal", heal_cmd_handler))
-    app.add_handler(CommandHandler("fix", heal_cmd_handler))
-    app.add_handler(CommandHandler("logs", logs_cmd_handler))
+    app.add_handler(CommandHandler(["heal", "fix", "selfheal"], heal_cmd_handler))
+    app.add_handler(CommandHandler(["logs", "log"], logs_cmd_handler))
     app.add_handler(CommandHandler("revert", revert_cmd_handler))
     app.add_handler(CommandHandler("healing", healing_dashboard_handler))
     app.add_handler(CallbackQueryHandler(callback_query_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_text_message_handler))
 
 def run_admin_bot_polling() -> None:
-    """Run polling loop for dedicated Admin Bot."""
+    """Run polling loop for dedicated Admin Bot in background thread with clean event loop."""
     token = settings.ADMIN_BOT_TOKEN
     if not token or token.startswith("mock_"):
         logger.info("ADMIN_BOT_TOKEN not configured; skipping dedicated Admin Bot thread.")
@@ -522,8 +520,11 @@ def run_admin_bot_polling() -> None:
 
     try:
         logger.info("Starting Dedicated Admin Bot polling (@nigaballsblotbot)...")
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         app = ApplicationBuilder().token(token).concurrent_updates(True).build()
         setup_admin_bot(app)
-        app.run_polling()
+        # stop_signals=None prevents 'set_wakeup_fd only works in main thread' in background thread
+        app.run_polling(stop_signals=None, poll_interval=1.0)
     except Exception as e:
         logger.error(f"Error during Admin Bot runtime: {e}", exc_info=True)
