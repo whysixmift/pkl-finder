@@ -55,3 +55,47 @@ class BaseLLMProvider(ABC):
     ) -> dict:
         """Analyze bug report and code context, returning a surgical code fix dictionary."""
         return {}
+
+    async def prepare_interview_cheatsheet(
+        self,
+        title: Optional[str] = None,
+        company: Optional[str] = None,
+        description: Optional[str] = None,
+        cv_text: Optional[str] = None,
+        **kwargs
+    ) -> dict:
+        """Generate tailored technical questions, behavioral questions, and tips for this job opening."""
+        return {}
+
+    async def optimize_cv_for_job(
+        self,
+        title: Optional[str] = None,
+        company: Optional[str] = None,
+        description: Optional[str] = None,
+        cv_text: Optional[str] = None,
+        **kwargs
+    ) -> dict:
+        """Generate tailored ATS-friendly profile summary and achievement bullet points."""
+        return {}
+
+    async def recommend_portfolio_project(
+        self,
+        title: Optional[str] = None,
+        company: Optional[str] = None,
+        missing_skills: Optional[List[str]] = None,
+        cv_text: Optional[str] = None,
+        **kwargs
+    ) -> dict:
+        """Recommend a practical 2-3 day weekend project to close skill gaps for this job opening."""
+        return {}
+
+    async def draft_followup_email(
+        self,
+        company_name: Optional[str] = None,
+        job_title: Optional[str] = None,
+        cv_text: Optional[str] = None,
+        candidate_name: Optional[str] = None,
+        **kwargs
+    ) -> dict:
+        """Generate polite, professional follow-up email after applying."""
+        return {}

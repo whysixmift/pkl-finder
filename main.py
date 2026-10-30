@@ -123,6 +123,33 @@ async def post_init(application) -> None:
 
     logger.info("Starting background scheduler...")
     setup_scheduler()
+
+    # Register comprehensive Telegram Bot command menu popup for all scopes
+    try:
+        from telegram import BotCommand, BotCommandScopeDefault, BotCommandScopeAllPrivateChats
+        user_commands = [
+            BotCommand("start", "Mulai dashboard & navigasi menu utama"),
+            BotCommand("search", "Cari lowongan kerja & remote sesuai CV"),
+            BotCommand("latest", "10 rekomendasi lowongan kerja terbaru"),
+            BotCommand("favorites", "Daftar lowongan kerja yang disimpan"),
+            BotCommand("profile", "Lihat profil CV & preferensi karir"),
+            BotCommand("uploadcv", "Unggah / perbarui CV (.PDF / .DOCX)"),
+            BotCommand("queue", "Antrean draft email lamaran"),
+            BotCommand("sendall", "Kirim semua email lamaran approved"),
+            BotCommand("history", "Riwayat lamaran & aktivitas"),
+            BotCommand("settings", "Atur filter kerja (Remote/Onsite/Gaji)"),
+            BotCommand("email", "Status koneksi pengiriman email"),
+            BotCommand("connect_google", "Hubungkan Google SSO (Kirim via Gmail)"),
+            BotCommand("credentials", "Setup manual SMTP email sender"),
+            BotCommand("companies", "Daftar perusahaan yang terindeks"),
+            BotCommand("openapplications", "Kirim inisiatif open application"),
+            BotCommand("help", "Panduan & bantuan lengkap fitur bot")
+        ]
+        await application.bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
+        await application.bot.set_my_commands(user_commands, scope=BotCommandScopeAllPrivateChats())
+        logger.info("Telegram Bot command menu popup registered successfully.")
+    except Exception as cmd_err:
+        logger.warning(f"Failed to register Telegram Bot command popup: {cmd_err}")
     
     logger.info(f"Bot branch initialization completed on port {settings.BOT_PORT}.")
 

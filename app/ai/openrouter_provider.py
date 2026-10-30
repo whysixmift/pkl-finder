@@ -236,8 +236,8 @@ class OpenRouterProvider(BaseLLMProvider):
         desc_context = f"\nJob Context / Description: {job_description[:300]}" if job_description else ""
 
         system_prompt = f"""
-        You are an elite, highly persuasive cold email copywriter specializing in tech internship and PKL applications.
-        Write a concise, high-converting, professional, and personalized cold outreach email to the recruitment / engineering team at {company_name}.
+        You are an elite, highly persuasive cold email copywriter specializing in tech job applications (Full-Time, Remote, Contract, Junior/Mid, and Internship).
+        Write a concise, high-converting, professional, and personalized job application email to the recruitment / engineering team at {company_name}.
         
         Strict Requirements:
         - NEVER use generic placeholder templates.
@@ -253,7 +253,7 @@ class OpenRouterProvider(BaseLLMProvider):
         
         Output MUST be ONLY a valid JSON object with exact keys:
         {{
-          "subject": "Unique, compelling subject line (e.g., Permohonan PKL / Magang [Role] - [Candidate Name])",
+          "subject": "Unique, compelling subject line (e.g., Lamaran Posisi [Role] - [Candidate Name])",
           "body": "Complete, polite, and persuasive email body with professional sign-off and mention of attached CV."
         }}
         """
@@ -287,18 +287,18 @@ class OpenRouterProvider(BaseLLMProvider):
             logger.warning(f"OpenRouter cold email drafting failed ({e}), generating local tailored fallback.")
 
         # Local intelligent fallback
-        target_role = job_title or "Software Engineer / IT Intern"
-        fallback_subject = f"Aplikasi PKL / Magang ({target_role}) - {company_name}"
+        target_role = job_title or "Software Engineer / Professional Tech Role"
+        fallback_subject = f"Lamaran Posisi {target_role} - {company_name}"
         fallback_body = (
             f"Yth. Tim Rekrutmen & HRD {company_name},\n\n"
-            f"Perkenalkan, saya tertarik untuk mengajukan permohonan program Praktik Kerja Lapangan (PKL) / Magang di {company_name} "
+            f"Perkenalkan, saya tertarik untuk mengajukan lamaran kerja di {company_name} "
             f"untuk posisi {target_role}.\n\n"
             f"Berdasarkan latar belakang teknis yang saya miliki, saya memiliki ketertarikan mendalam dan pengalaman langsung dalam pengembangan software, problem solving, dan kolaborasi tim. "
-            f"Saya sangat mengagumi inovasi yang dijalankan oleh {company_name} dan yakin dapat memberikan kontribusi aktif selama periode magang.\n\n"
+            f"Saya sangat mengagumi produk & inovasi yang dijalankan oleh {company_name} dan yakin dapat memberikan kontribusi aktif dalam tim Bapak/Ibu.\n\n"
             f"Sebagai bahan pertimbangan Bapak/Ibu, Curriculum Vitae (CV) lengkap saya telah saya lampirkan pada email ini.\n\n"
             f"Besar harapan saya untuk mendapatkan kesempatan wawancara atau diskusi lebih lanjut. Terima kasih banyak atas perhatian dan waktu Bapak/Ibu.\n\n"
             f"Hormat saya,\n"
-            f"Kandidat PKL Finder"
+            f"Kandidat Pelamar"
         )
         return fallback_subject, fallback_body
 
@@ -602,3 +602,264 @@ class OpenRouterProvider(BaseLLMProvider):
             "diagnosis": "Tidak dapat merumuskan patch otomatis tanpa koneksi AI aktif.",
             "explanation": "Koneksi OpenRouter terputus dan tidak ada aturan rule-based yang cocok."
         }
+
+    async def prepare_interview_cheatsheet(
+        self,
+        title: Optional[str] = None,
+        company: Optional[str] = None,
+        description: Optional[str] = None,
+        cv_text: Optional[str] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Generate tailored technical questions, behavioral questions, and tips for this job opening."""
+        title = title or kwargs.get("job_title", "Software Engineer")
+        company = company or kwargs.get("company_name", "Perusahaan")
+        description = description or kwargs.get("job_description", "")
+        cv_text = cv_text or kwargs.get("candidate_cv_text")
+        system_prompt = (
+            "You are an expert Tech Hiring Manager and Interview Coach.\n"
+            f"Generate an interview preparation guide in Indonesian for a candidate applying for the role '{title}' at '{company}'.\n\n"
+            "Output MUST be ONLY a JSON object with this exact structure:\n"
+            "{\n"
+            '  "technical_questions": [\n'
+            '    {"question": "Pertanyaan teknis 1", "answer_key": "Kunci jawaban/konsep penting yang harus dijawab pelamar"},\n'
+            '    {"question": "Pertanyaan teknis 2", "answer_key": "Kunci jawaban/konsep penting"},\n'
+            '    {"question": "Pertanyaan teknis 3", "answer_key": "Kunci jawaban/konsep penting"},\n'
+            '    {"question": "Pertanyaan teknis 4", "answer_key": "Kunci jawaban/konsep penting"},\n'
+            '    {"question": "Pertanyaan teknis 5", "answer_key": "Kunci jawaban/konsep penting"}\n'
+            '  ],\n'
+            '  "behavioral_questions": [\n'
+            '    {"question": "Pertanyaan perilaku/budaya 1", "tip": "Tips menjawab"},\n'
+            '    {"question": "Pertanyaan perilaku/budaya 2", "tip": "Tips menjawab"},\n'
+            '    {"question": "Pertanyaan perilaku/budaya 3", "tip": "Tips menjawab"}\n'
+            '  ],\n'
+            '  "smart_questions_to_ask": [\n'
+            '    "Pertanyaan cerdas 1 yang harus diajukan kandidat kepada pewawancara",\n'
+            '    "Pertanyaan cerdas 2",\n'
+            '    "Pertanyaan cerdas 3"\n'
+            '  ]\n'
+            "}"
+        )
+
+        user_prompt = (
+            f"Job Title: {title}\nCompany: {company}\n"
+            f"Job Context:\n{description[:1500]}\n\n"
+            f"Candidate CV Snippet:\n{(cv_text or '')[:800]}"
+        )
+
+        def payload_factory(model_id: str) -> Dict[str, Any]:
+            return {
+                "model": model_id,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "response_format": {"type": "json_object"},
+                "stream": False
+            }
+
+        try:
+            data = await self._post_with_fallback(payload_factory)
+            content = data["choices"][0]["message"]["content"].strip()
+            if content.startswith("```"):
+                match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", content)
+                if match:
+                    content = match.group(1)
+            return json.loads(content)
+        except Exception as e:
+            logger.warning(f"AI interview prep failed ({e}), using heuristic fallback.")
+            return {
+                "technical_questions": [
+                    {"question": f"Jelaskan arsitektur teknis atau framework utama yang pernah Anda gunakan relevan dengan posisi {title}.", "answer_key": "Fokus pada struktur project, pemisahan layer (MVC/Clean Architecture), dan penanganan request."},
+                    {"question": "Bagaimana pendekatan Anda dalam menangani debugging query database atau performa API yang lambat?", "answer_key": "Sebutkan indexing, caching (Redis), profiling query SQL, dan pagination."},
+                    {"question": "Bagaimana pengalaman Anda dalam menggunakan Git, branching strategy, dan CI/CD pipeline?", "answer_key": "Jelaskan Gitflow (feature branches, PR review) serta auto testing saat push."},
+                    {"question": "Bagaimana Anda memastikan kode Anda aman dari kerentanan umum (misal SQL Injection, XSS, token expiry)?", "answer_key": "Gunakan ORM parameter binding, sanitize input, dan validasi JWT/Session."},
+                    {"question": "Bagaimana Anda memprioritaskan penyelesaian bug darurat di lingkungan production?", "answer_key": "Identifikasi dampak pengguna, cek error log, rollback jika perlu, lalu rilis hotfix terisolasi."}
+                ],
+                "behavioral_questions": [
+                    {"question": "Ceritakan saat Anda menghadapi kendala teknis yang sulit dan bagaimana Anda menyelesaikannya.", "tip": "Gunakan metode STAR (Situation, Task, Action, Result)."},
+                    {"question": "Bagaimana cara Anda beradaptasi jika ada perubahan mendadak pada kebutuhan fitur?", "tip": "Tunjukkan fleksibilitas, komunikasi proaktif dengan tech lead, dan estimasi realistis."},
+                    {"question": "Apa motivasi terbesar Anda ingin bergabung dan berkontribusi di perusahaan ini?", "tip": "Hubungkan visi perusahaan dengan ketertarikan karir teknologi Anda."}
+                ],
+                "smart_questions_to_ask": [
+                    f"Bagaimana komposisi tim engineering dan alur kerja sprint mingguan untuk posisi {title} di {company}?",
+                    "Teknologi atau tantangan teknis apa yang saat ini sedang menjadi fokus utama tim pengembang?",
+                    "Bagaimana metrik evaluasi keberhasilan untuk kandidat yang mengisi posisi ini dalam 3 bulan pertama?"
+                ]
+            }
+
+    async def optimize_cv_for_job(
+        self,
+        title: Optional[str] = None,
+        company: Optional[str] = None,
+        description: Optional[str] = None,
+        cv_text: Optional[str] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Generate tailored ATS-friendly profile summary and achievement bullet points."""
+        title = title or kwargs.get("job_title", "Software Engineer")
+        company = company or kwargs.get("company_name", "Perusahaan")
+        description = description or kwargs.get("job_description", "")
+        cv_text = cv_text or kwargs.get("candidate_cv_text")
+        system_prompt = (
+            "You are an elite ATS Resume Specialist.\n"
+            f"Generate tailored CV enhancements in Indonesian for a candidate applying to '{title}' at '{company}'.\n\n"
+            "Output MUST be ONLY a JSON object:\n"
+            "{\n"
+            '  "tailored_summary": "1 paragraf ringkasan profil (About Me) padat keyword yang lolos screening ATS",\n'
+            '  "highlight_bullets": [\n'
+            '    "Poin pengalaman/proyek 1 yang menonjolkan kecocokan teknis",\n'
+            '    "Poin pengalaman/proyek 2 berorientasi hasil terukur",\n'
+            '    "Poin pengalaman/proyek 3 kolaborasi & best practices"\n'
+            '  ],\n'
+            '  "ats_keywords": ["keyword 1", "keyword 2", "keyword 3", "keyword 4", "keyword 5"]\n'
+            "}"
+        )
+
+        user_prompt = f"Role: {title} at {company}\nJob Description:\n{description[:1500]}\nCandidate CV:\n{(cv_text or '')[:1000]}"
+
+        def payload_factory(model_id: str) -> Dict[str, Any]:
+            return {
+                "model": model_id,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "response_format": {"type": "json_object"},
+                "stream": False
+            }
+
+        try:
+            data = await self._post_with_fallback(payload_factory)
+            content = data["choices"][0]["message"]["content"].strip()
+            if content.startswith("```"):
+                match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", content)
+                if match:
+                    content = match.group(1)
+            parsed = json.loads(content)
+            if "must_have_keywords" not in parsed and "ats_keywords" in parsed:
+                parsed["must_have_keywords"] = parsed["ats_keywords"]
+            elif "ats_keywords" not in parsed and "must_have_keywords" in parsed:
+                parsed["ats_keywords"] = parsed["must_have_keywords"]
+            return parsed
+        except Exception as e:
+            logger.warning(f"AI CV optimize failed ({e}), using heuristic fallback.")
+            kws = [title, "API Development", "Problem Solving", "Database Management", "Clean Code"]
+            return {
+                "tailored_summary": (
+                    f"Pengembang perangkat lunak berorientasi solusi dengan keahlian praktis dalam pengembangan backend, API, dan sistem scalable. "
+                    f"Berpengalaman dalam clean code, database relasional, dan kolaborasi tim agile, siap berkontribusi secara optimal untuk posisi {title} di {company}."
+                ),
+                "highlight_bullets": [
+                    f"Mengembangkan dan mengoptimalkan RESTful API dengan response time cepat dan arsitektur database terstruktur.",
+                    f"Mengimplementasikan otomatisasi pengujian, containerization, dan version control menggunakan Git.",
+                    f"Bekerja sama dalam sprint development untuk merilis fitur sesuai requirement bisnis dan spesifikasi teknis."
+                ],
+                "ats_keywords": kws,
+                "must_have_keywords": kws
+            }
+
+    async def recommend_portfolio_project(
+        self,
+        title: Optional[str] = None,
+        company: Optional[str] = None,
+        missing_skills: Optional[List[str]] = None,
+        cv_text: Optional[str] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Recommend a practical 2-3 day weekend project to close skill gaps for this job opening."""
+        title = title or kwargs.get("job_title", "Software Engineer")
+        company = company or kwargs.get("company_name", "Perusahaan")
+        missing_skills = missing_skills or kwargs.get("missing_skills") or []
+        cv_text = cv_text or kwargs.get("candidate_cv_text")
+        skills_str = ", ".join(missing_skills) if missing_skills else "Full-stack integration, Docker, Cloud"
+        system_prompt = (
+            "You are an elite Software Engineering Mentor.\n"
+            f"Propose a concrete, impressive 2-3 day GitHub weekend project to help a candidate prove skills in: {skills_str}.\n"
+            "Output MUST be ONLY a JSON object:\n"
+            "{\n"
+            '  "project_title": "Judul Proyek Keren & Relevan",\n'
+            '  "elevator_pitch": "Penjelasan singkat 1-2 kalimat fungsi proyek",\n'
+            '  "tech_stack": ["Teknologi 1", "Teknologi 2", "Teknologi 3"],\n'
+            '  "implementation_steps": [\n'
+            '    "Langkah 1: Setup arsitektur",\n'
+            '    "Langkah 2: Fitur inti",\n'
+            '    "Langkah 3: Testing & deployment"\n'
+            '  ],\n'
+            '  "github_readme_tip": "Tips menulis README agar recruiter langsung terkesan"\n'
+            "}"
+        )
+
+        user_prompt = f"Role: {title} at {company}\nMissing/Target Skills: {skills_str}"
+
+        def payload_factory(model_id: str) -> Dict[str, Any]:
+            return {
+                "model": model_id,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "response_format": {"type": "json_object"},
+                "stream": False
+            }
+
+        try:
+            data = await self._post_with_fallback(payload_factory)
+            content = data["choices"][0]["message"]["content"].strip()
+            if content.startswith("```"):
+                match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", content)
+                if match:
+                    content = match.group(1)
+            parsed = json.loads(content)
+            if "pitch" not in parsed:
+                parsed["pitch"] = parsed.get("elevator_pitch", "")
+            if "architecture_hint" not in parsed:
+                parsed["architecture_hint"] = "\n".join(parsed.get("implementation_steps", []))
+            if "estimated_time" not in parsed:
+                parsed["estimated_time"] = "2-3 Hari Weekend"
+            return parsed
+        except Exception as e:
+            logger.warning(f"AI project recommend failed ({e}), using heuristic fallback.")
+            primary_skill = missing_skills[0] if missing_skills else "FastAPI & Docker"
+            steps = [
+                "Inisialisasi repo GitHub dengan struktur modular dan environment config (.env.example).",
+                f"Bangun endpoint CRUD dengan validasi skema dan integrasikan {primary_skill}.",
+                "Tulis Dockerfile multi-stage build dan buat GitHub Actions workflow untuk automated testing."
+            ]
+            return {
+                "project_title": f"Production-Ready Microservice with {primary_skill}",
+                "elevator_pitch": f"Service API independen yang mengimplementasikan {primary_skill} dengan caching, logging terpusat, dan containerization.",
+                "pitch": f"Service API independen yang mengimplementasikan {primary_skill} dengan caching, logging terpusat, dan containerization.",
+                "tech_stack": [primary_skill, "Docker", "PostgreSQL / SQLite", "GitHub Actions"],
+                "implementation_steps": steps,
+                "architecture_hint": "\n".join(steps),
+                "estimated_time": "2-3 Hari Weekend",
+                "github_readme_tip": "Sertakan diagram arsitektur visual (Mermaid.js), instruksi 'Quickstart with Docker Compose', dan benchmark performa singkat."
+            }
+
+    async def draft_followup_email(
+        self,
+        company_name: Optional[str] = None,
+        job_title: Optional[str] = None,
+        cv_text: Optional[str] = None,
+        candidate_name: Optional[str] = None,
+        **kwargs
+    ) -> Dict[str, str]:
+        """Generate polite, professional follow-up email after applying."""
+        company_name = company_name or kwargs.get("company", "Perusahaan")
+        job_title = job_title or kwargs.get("title", "Posisi Lowongan")
+        candidate_name = candidate_name or kwargs.get("name", "Kandidat Pelamar")
+        subject = f"Menindaklanjuti Lamaran: {job_title} - {candidate_name}"
+        body = (
+            f"Yth. Tim Rekrutmen & HRD {company_name},\n\n"
+            f"Semoga Bapak/Ibu senantiasa dalam keadaan sehat.\n\n"
+            f"Melalui email ini, saya ({candidate_name}) ingin menindaklanjuti berkas lamaran saya untuk posisi {job_title} "
+            f"yang telah saya kirimkan beberapa waktu yang lalu.\n\n"
+            f"Saya sangat antusias dengan peluang untuk dapat berkontribusi di {company_name} dan yakin bahwa latar belakang "
+            f"teknis serta portofolio saya dapat memberikan nilai tambah bagi tim Bapak/Ibu.\n\n"
+            f"Apabila ada informasi atau berkas pendukung tambahan yang dibutuhkan, saya siap menyediakannya. "
+            f"Terima kasih banyak atas perhatian dan waktu Bapak/Ibu.\n\n"
+            f"Hormat saya,\n"
+            f"{candidate_name}"
+        )
+        return {"subject": subject, "body": body}

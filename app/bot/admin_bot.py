@@ -511,6 +511,28 @@ def setup_admin_bot(app) -> None:
     app.add_handler(CallbackQueryHandler(callback_query_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_text_message_handler))
 
+async def admin_post_init(app) -> None:
+    """Register command menu popup for Admin Bot."""
+    try:
+        from telegram import BotCommand, BotCommandScopeDefault, BotCommandScopeAllPrivateChats
+        admin_commands = [
+            BotCommand("start", "Mulai bot admin & panel navigasi"),
+            BotCommand("heal", "Self-healing auto diagnosis, fix & deploy"),
+            BotCommand("log", "Cek log runtime & stack trace error"),
+            BotCommand("pending", "Tinjau pendaftaran user menunggu approval"),
+            BotCommand("users", "Kelola & lihat daftar user terdaftar"),
+            BotCommand("stats", "Statistik database & scraper loker"),
+            BotCommand("scrape", "Trigger scraping lowongan kerja baru"),
+            BotCommand("revert", "Batalkan (rollback) patch terakhir"),
+            BotCommand("healing", "Dashboard metrik status self-healing"),
+            BotCommand("help", "Panduan lengkap perintah admin")
+        ]
+        await app.bot.set_my_commands(admin_commands, scope=BotCommandScopeDefault())
+        await app.bot.set_my_commands(admin_commands, scope=BotCommandScopeAllPrivateChats())
+        logger.info("Admin Bot commands registered successfully.")
+    except Exception as e:
+        logger.warning(f"Failed to register Admin Bot commands: {e}")
+
 def run_admin_bot_polling() -> None:
     """Run polling loop for dedicated Admin Bot in background thread with clean event loop."""
     token = settings.ADMIN_BOT_TOKEN
@@ -522,7 +544,7 @@ def run_admin_bot_polling() -> None:
         logger.info("Starting Dedicated Admin Bot polling (@nigaballsblotbot)...")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        app = ApplicationBuilder().token(token).concurrent_updates(True).build()
+        app = ApplicationBuilder().token(token).concurrent_updates(True).post_init(admin_post_init).build()
         setup_admin_bot(app)
         # stop_signals=None prevents 'set_wakeup_fd only works in main thread' in background thread
         app.run_polling(stop_signals=None, poll_interval=1.0)

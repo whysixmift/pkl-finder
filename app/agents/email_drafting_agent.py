@@ -9,6 +9,7 @@ from app.ai.evaluator import evaluator
 from app.database.models import EmailQueue, Company, Job, CVProfile
 from app.services.cv_service import cv_service
 from app.services.email_service import email_service
+from app.utils.contact_parser import extract_clean_emails
 from app.utils.logger import logger
 
 class EmailDraftingAgent(BaseAgent):
@@ -51,15 +52,25 @@ class EmailDraftingAgent(BaseAgent):
             cv_text = cv_profile.cv_text if cv_profile else ""
             cv_attachment = [cv_profile.file_path] if (cv_profile and cv_profile.file_path and os.path.exists(cv_profile.file_path)) else None
 
-            # 4. Resolve recipient email
-            target_email = recipient_email or company.recruitment_email
+            # 4. Resolve recipient email with smart validation & zero dummy fallback
+            target_email = recipient_email
+            if not target_email and job and job.description:
+                detected_emails = extract_clean_emails(job.description)
+                if detected_emails:
+                    target_email = detected_emails[0]
+                    company.recruitment_email = target_email
+                    await session.flush()
+
+            if not target_email and company.recruitment_email:
+                if not any(b in company.recruitment_email.lower() for b in ["perusahaan.co.id", "example.com", "noreply"]):
+                    target_email = company.recruitment_email
+
             if not target_email:
-                # Construct plausible fallback or placeholder
-                company_domain = company.website.replace("http://", "").replace("https://", "").strip("/") if company.website else "perusahaan.co.id"
-                target_email = f"recruitment@{company_domain}"
+                # Never inject fake dummy emails! Raise explicit error so caller can prompt user
+                raise ValueError("MISSING_RECIPIENT_EMAIL")
 
             # 5. Generate personalized text via AI
-            job_title = job.title if job else "Magang / PKL Tech"
+            job_title = job.title if job else "Software Engineer / Professional Tech Role"
             job_desc = job.description if job else ""
             subject, body = await evaluator.write_cold_email(
                 company_name=company.name,

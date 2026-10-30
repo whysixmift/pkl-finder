@@ -18,8 +18,19 @@ from app.services.cv_service import cv_service
 from app.services.email_service import email_service
 from app.services.job_service import JobService
 from app.ai.evaluator import evaluator
-from app.services.crawler_service import career_crawler
-from app.services.discovery_service import discovery_engine
+try:
+    from app.services.crawler_service import career_crawler
+    from app.services.discovery_service import discovery_engine
+except Exception as e:
+    logger.warning(f"Failed to import crawler/discovery modules: {e}")
+    career_crawler = None
+    discovery_engine = None
+from app.utils.contact_parser import (
+    extract_clean_emails,
+    extract_whatsapp_number,
+    build_whatsapp_outreach_url,
+    build_linkedin_recruiter_url
+)
 from app.utils.logger import logger
 
 # Initialize Job Service
@@ -141,42 +152,78 @@ def format_job_message(job: Job, user_id: int) -> str:
     job_loc = html.escape(str(job.location or "Indonesia"))
     job_source = html.escape(str(job.source.upper() if job.source else "WEB"))
     job_salary = html.escape(str(job.salary or "Tidak disebutkan"))
-    job_type = html.escape(str(job.employment_type or "Internship"))
+    job_type = html.escape(str(job.employment_type or "Full-Time"))
     job_work_mode = html.escape(str(job.work_mode or "On-site"))
     job_cat = html.escape(str(getattr(ai_score, "company_category", "Tech") or "Tech"))
     job_priority = html.escape(str(getattr(ai_score, "priority", "medium") or "medium").upper())
 
+    # Detect direct contact channels
+    desc = job.description or ""
+    detected_emails = extract_clean_emails(desc)
+    wa_num = extract_whatsapp_number(desc)
+    contact_badges = []
+    if detected_emails:
+        contact_badges.append("📧 Direct HR Email")
+    if wa_num:
+        contact_badges.append("💬 WhatsApp PIC")
+    contact_line = f"📞 <b>Kontak Langsung:</b> <code>{' | '.join(contact_badges)}</code>\n" if contact_badges else ""
+
     return (
-        f"🚀 <b>PKL / Internship Baru Ditemukan!</b>\n\n"
+        f"💼 <b>Peluang Karir Baru Ditemukan!</b>\n\n"
         f"🏢 <b>Perusahaan:</b> <code>{comp_name}</code>\n"
         f"💼 <b>Posisi:</b> <b>{job_title}</b>\n"
         f"📍 <b>Lokasi:</b> <code>{job_loc}</code>\n"
         f"🌐 <b>Sumber:</b> <code>{job_source}</code>\n"
-        f"💰 <b>Gaji:</b> <code>{job_salary}</code>\n"
-        f"⏱ <b>Tipe:</b> <code>{job_type} ({job_work_mode})</code>\n"
+        f"💰 <b>Gaji/Kompensasi:</b> <code>{job_salary}</code>\n"
+        f"⏱ <b>Tipe Kerja:</b> <code>{job_type} ({job_work_mode})</code>\n"
         f"{score_str}\n"
-        f"💼 <b>Category:</b> <code>{job_cat}</code>\n"
-        f"🔥 <b>Priority:</b> <code>{job_priority}</code>\n\n"
-        f"📋 <b>Analisis Kesesuaian:</b>\n<i>{summary}</i>\n\n"
+        f"🎯 <b>Kategori:</b> <code>{job_cat}</code>\n"
+        f"🔥 <b>Prioritas:</b> <code>{job_priority}</code>\n"
+        f"{contact_line}\n"
+        f"📋 <b>Analisis Kesesuaian Profil:</b>\n<i>{summary}</i>\n\n"
         f"✅ <b>Kecocokan Skill:</b> {matched_str}\n"
         f"❌ <b>Skill Kurang:</b> {missing_str}\n\n"
         f"💡 <b>Mengapa Anda Cocok:</b>\n{reasons_list}"
     )
 
-def get_job_keyboard(job: Job, is_fav: bool = False) -> InlineKeyboardMarkup:
-    """Create inline keyboard with actions (Favorite toggle + View link + Apply Cold Email)."""
-    fav_text = "❤️ Hapus Favorit" if is_fav else "⭐ Favoritkan"
+def get_job_keyboard(job: Job, is_fav: bool = False, candidate_name: str = "Pelamar") -> InlineKeyboardMarkup:
+    """Create a friendly, intuitive grouped keyboard with instant outreach and AI co-pilot tools."""
+    fav_text = "❤️ Hapus Favorit" if is_fav else "⭐ Simpan Favorit"
     fav_callback = f"unfav:{job.id}" if is_fav else f"fav:{job.id}"
     
-    keyboard = [
-        [
-            InlineKeyboardButton(fav_text, callback_data=fav_callback),
-            InlineKeyboardButton("🔗 Buka Lowongan", url=job.url)
-        ],
-        [
-            InlineKeyboardButton("✉️ Lamar Cepat (Auto Cold Email + CV)", callback_data=f"apply_email:{job.id}")
-        ]
+    desc = job.description or ""
+    wa_num = extract_whatsapp_number(desc)
+    comp_name = job.company_name or "Perusahaan"
+    job_title = job.title or "Posisi Lowongan"
+
+    # Row 1: Save & Open Link
+    row1 = [
+        InlineKeyboardButton(fav_text, callback_data=fav_callback),
+        InlineKeyboardButton("🔗 Buka Lowongan", url=job.url)
     ]
+
+    # Row 2: Outreach (Email & WhatsApp or LinkedIn)
+    row2 = [InlineKeyboardButton("✉️ Lamar via Email", callback_data=f"apply_email:{job.id}")]
+    if wa_num:
+        wa_url = build_whatsapp_outreach_url(wa_num, candidate_name, job_title, comp_name)
+        row2.append(InlineKeyboardButton("💬 Chat WhatsApp", url=wa_url))
+    else:
+        linkedin_url = build_linkedin_recruiter_url(comp_name)
+        row2.append(InlineKeyboardButton("🔎 Recruiter LinkedIn", url=linkedin_url))
+
+    # Row 3: AI Career Co-Pilot (Interview prep & ATS optimizer)
+    row3 = [
+        InlineKeyboardButton("🎯 Tips Interview", callback_data=f"job_prep:{job.id}"),
+        InlineKeyboardButton("✨ Optimasi CV ATS", callback_data=f"job_ats:{job.id}")
+    ]
+
+    # Row 4: Portfolio project idea & LinkedIn fallback if WA was present
+    row4 = [InlineKeyboardButton("💡 Ide Proyek GitHub", callback_data=f"job_idea:{job.id}")]
+    if wa_num:
+        linkedin_url = build_linkedin_recruiter_url(comp_name)
+        row4.append(InlineKeyboardButton("🔎 Recruiter LinkedIn", url=linkedin_url))
+
+    keyboard = [row1, row2, row3, row4]
     return InlineKeyboardMarkup(keyboard)
 
 # ----------------- STARTUP & CONFIGS -----------------
@@ -251,60 +298,76 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         kws_str = ", ".join(keywords[:5]) if keywords else "software engineer, developer"
 
         welcome_text = (
-            "🤖 <b>GetAJob / PKL Finder - AI Career Assistant</b>\n\n"
-            "Status: 🟢 <b>Akses SaaS Terverifikasi</b>\n"
-            f"📄 CV Aktif: <code>{user_cv.filename}</code>\n\n"
-            f"🎯 <b>Pekerjaan yang Cocok untuk Anda:</b>\n"
-            f"{roles_list}\n\n"
-            f"💡 <b>Keahlian Terdeteksi:</b>\n• {skills_str}\n\n"
-            f"🔍 <b>Keyword Pencarian Terpersonalisasi:</b>\n<code>{kws_str}</code>\n\n"
-            "👉 <i>Kirim /search atau klik tombol di bawah untuk mulai scraping lowongan kerja cocok:</i>"
+            "🤖 <b>GetAJob! - AI Career Hunter Platform</b> 🚀\n\n"
+            f"Halo <b>{html.escape(update.effective_user.first_name or 'Job Hunter')}</b>!\n"
+            "Asisten cerdas pelamar kerja untuk semua tipe posisi: <b>Remote (WFA), On-site, Hybrid, Full-Time, Contract, & Internship</b>.\n\n"
+            "🟢 <b>Status Akun:</b> Terverifikasi\n"
+            f"📄 <b>CV Aktif:</b> <code>{user_cv.filename}</code>\n\n"
+            f"🎯 <b>Rekomendasi Posisi untuk Anda:</b>\n{roles_list}\n\n"
+            f"💡 <b>Keahlian Utama:</b>\n• {skills_str}\n\n"
+            "Pilih menu di bawah ini atau gunakan tombol <b>Menu</b> di pojok kiri bawah:"
         )
         keyboard = [
-            [InlineKeyboardButton("🚀 Cari Lowongan Kerja Sekarang", callback_data="btn_search")],
-            [InlineKeyboardButton("🔄 Unggah CV Baru", callback_data="btn_uploadcv")]
+            [
+                InlineKeyboardButton("🔍 Cari Loker Cocok", callback_data="btn_search"),
+                InlineKeyboardButton("📋 10 Loker Terbaru", callback_data="btn_latest")
+            ],
+            [
+                InlineKeyboardButton("⭐ Lowongan Tersimpan", callback_data="btn_favorites"),
+                InlineKeyboardButton("✉️ Draft Email Lamaran", callback_data="btn_queue")
+            ],
+            [
+                InlineKeyboardButton("👤 Profil & CV Saya", callback_data="btn_profile"),
+                InlineKeyboardButton("📄 Unggah / Ganti CV", callback_data="btn_uploadcv")
+            ],
+            [
+                InlineKeyboardButton("⚙️ Filter & Preferensi", callback_data="btn_settings"),
+                InlineKeyboardButton("🔑 Hubungkan Google", callback_data="btn_connect_google")
+            ],
+            [
+                InlineKeyboardButton("🩺 Cek Status Sistem", callback_data="btn_doctor"),
+                InlineKeyboardButton("💡 Panduan & Bantuan", callback_data="btn_help")
+            ]
         ]
-        await update.message.reply_text(welcome_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.edit_message_text(welcome_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await update.message.reply_text(welcome_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 @error_boundary
 @whitelist_required
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    target_msg = update.effective_message or update.message
     help_text = (
-        "📖 <b>Daftar Perintah PKL Finder SaaS Bot:</b>\n\n"
-        "🔍&nbsp;<b>Pencarian & Informasi:</b>\n"
-        "/search - Jalankan scraping lowongan secara realtime\n"
-        "/latest - Tampilkan 10 lowongan magang rekomendasi terbaru\n"
-        "/favorites - Lihat lowongan magang yang difavoritkan\n"
-        "/history - Lihat riwayat pencocokan & aktivitas\n"
-        "/recheck - Evaluasi ulang semua lowongan terhadap CV aktif\n\n"
-        "👤&nbsp;<b>Profil & Portofolio:</b>\n"
-        "/profile - Periksa kelengkapan berkas CV & portofolio\n"
-        "/uploadcv - Unggah CV baru (.PDF atau .DOCX)\n"
-        "/uploadportfolio - Atur URL portofolio atau unggah file\n"
-        "/uploadcoverletter - Atur template cover letter pendukung\n\n"
-        "📧&nbsp;<b>Pengiriman Email (Google SSO & SMTP):</b>\n"
-        "/connect_google - 🔑 Hubungkan Google SSO (Gmail API) untuk kirim email\n"
-        "/credentials - Konfigurasi SMTP email pengirim manual\n"
-        "/email - Periksa konfigurasi email pengirim aktif\n"
-        "/queue - Tampilkan draft email antrean AI (dengan lampiran CV)\n"
-        "/sendall - Dispatch semua email approved\n\n"
-        "🏢&nbsp;<b>Company Discovery:</b>\n"
-        "/companies - Tampilkan daftar perusahaan terdaftar\n"
-        "/openapplications - Tampilkan daftar email Open Applications\n\n"
-        "🛠&nbsp;<b>Admin Diagnostics & Multi-Agent:</b>\n"
-        "/agents - Status sistem 8 Agen Otonom (1 Feature = 1 Agent)\n"
-        "/health - Periksa status kesehatan platform\n"
-        "/models - Status latensi OpenRouter & failover\n"
-        "/providers - Skor kesehatan & status scraper\n"
-        "/migrations - Riwayat revisi database Alembic\n"
-        "/schema - Verifikasi kecocokan skema DB dengan ORM\n"
-        "/doctor - Diagnosa lengkap subsystem & pemecahan error\n"
-        "/system - Status resource (CPU, Memory, Disk) host\n"
-        "/cache - Metrik data intelligence cache global\n"
-        "/metrics - Konversi email & success rate\n"
-        "/logs - Tampilkan 15 baris terakhir file log"
+        "🤖 <b>GetAJob! - AI Career Hunter & Auto-Apply Bot</b>\n\n"
+        "💼 <b>Pencarian & Peluang Karir (Remote, Onsite, Hybrid, Freelance, Full-Time):</b>\n"
+        "/search - Cari lowongan kerja realtime sesuai profil CV\n"
+        "/latest - 10 lowongan kerja rekomendasi terbaru\n"
+        "/favorites - Lowongan karir yang disimpan\n"
+        "/history - Riwayat lamaran & aktivitas\n"
+        "/recheck - Evaluasi ulang semua loker dengan CV terbaru\n\n"
+        "👤 <b>Profil CV & Karir:</b>\n"
+        "/profile - Cek kelengkapan CV & portofolio\n"
+        "/uploadcv - Unggah / ganti CV (.PDF atau .DOCX)\n"
+        "/uploadportfolio - Atur link GitHub / portofolio\n"
+        "/uploadcoverletter - Atur template surat lamaran\n\n"
+        "📧 <b>Aplikasi & Pengiriman Lamaran:</b>\n"
+        "/connect_google - Hubungkan Google SSO (Kirim via Gmail API)\n"
+        "/credentials - Setup manual SMTP email sender\n"
+        "/email - Cek konfigurasi pengiriman email\n"
+        "/queue - Tinjau antrean draft email lamaran\n"
+        "/sendall - Kirim semua email lamaran approved\n\n"
+        "🏢 <b>Perusahaan & Eksplorasi:</b>\n"
+        "/companies - Daftar perusahaan yang terindeks\n"
+        "/openapplications - Peluang kirim inisiatif open application\n\n"
+        "⚙️ <b>Sistem & Pengaturan:</b>\n"
+        "/settings - Atur preferensi kerja & filter gaji/remote\n"
+        "/doctor - Platform diagnostic & sanity check\n"
+        "/health - Cek kesehatan sistem & database\n"
+        "/help - Panduan lengkap fitur bot"
     )
-    await update.message.reply_text(help_text, parse_mode="HTML")
+    await target_msg.reply_text(help_text, parse_mode="HTML")
 
 # ----------------- SYSTEM & CORE COMMAND HANDLERS -----------------
 
@@ -570,16 +633,17 @@ async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 @whitelist_required
 async def latest_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+    target_msg = update.effective_message or update.message
     jobs = await job_service.get_latest_jobs(user_id=user_id, limit=10, recommended_only=True)
     if not jobs:
-        await update.message.reply_text("📭 Tidak ada lowongan rekomendasi terbaru di database.")
+        await target_msg.reply_text("📭 Tidak ada lowongan rekomendasi terbaru di database.")
         return
         
-    await update.message.reply_text("📋 <b>Daftar 10 Lowongan Magang Rekomendasi Terbaru:</b>", parse_mode="HTML")
+    await target_msg.reply_text("📋 <b>Daftar 10 Lowongan Rekomendasi Karir & Remote Terbaru:</b>", parse_mode="HTML")
     for job in jobs:
         text = format_job_message(job, user_id)
         keyboard = get_job_keyboard(job, is_fav=False)
-        await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
+        await target_msg.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 @error_boundary
 @whitelist_required
@@ -836,7 +900,8 @@ async def schema_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 @error_boundary
 async def doctor_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Runs a complete test suite check across all subsystems, recommending hotfixes."""
-    await update.message.reply_text("🩺 <i>Menjalankan Platform Doctor Diagnostics...</i>", parse_mode="HTML")
+    target_msg = update.effective_message or update.message
+    await target_msg.reply_text("🩺 <i>Menjalankan Platform Doctor Diagnostics...</i>", parse_mode="HTML")
     
     report = "🩺 <b>Platform Doctor Diagnostic Report:</b>\n\n"
     
@@ -851,7 +916,8 @@ async def doctor_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # 2. OpenRouter Check
     success, or_msg, latency = await evaluator.verify_connectivity()
     if success:
-        report += f"✅ <b>OpenRouter AI:</b> Terkoneksi (Latensi: {latency:.2f}s)\n"
+        sec = latency / 1000.0
+        report += f"✅ <b>OpenRouter AI:</b> Terkoneksi (Latensi: {latency} ms / {sec:.2f}s)\n"
     else:
         report += f"❌ <b>OpenRouter AI:</b> GAGAL ({or_msg})\n👉 Periksa OPENROUTER_API_KEY di file .env.\n"
         
@@ -862,7 +928,7 @@ async def doctor_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     else:
         report += "❌ <b>Filesystem:</b> file database jobs.db tidak ditemukan.\n"
         
-    await update.message.reply_text(report, parse_mode="HTML")
+    await target_msg.reply_text(report, parse_mode="HTML")
 
 @admin_only
 @error_boundary
@@ -1413,6 +1479,106 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 await update.message.reply_text("✅ <b>Body draft email berhasil diubah!</b> Gunakan /queue untuk meninjau kembali.", parse_mode="HTML")
         context.user_data["state"] = None
 
+    # 5. Awaiting manual input for recipient HR email on job application
+    elif state and state.startswith("AWAITING_RECIPIENT_EMAIL:"):
+        job_id = int(state.split(":")[1])
+        email_input = text.strip()
+        import re
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email_input):
+            await update.message.reply_text(
+                "❌ <b>Format email tidak valid.</b>\n"
+                "Silakan kirimkan alamat email yang valid (contoh: <code>careers@perusahaan.com</code>):",
+                parse_mode="HTML"
+            )
+            return
+
+        async with async_session_maker() as session:
+            job_stmt = select(Job).options(selectinload(Job.company)).where(Job.id == job_id)
+            res = await session.execute(job_stmt)
+            job = res.scalar_one_or_none()
+            if not job:
+                await update.message.reply_text("❌ Lowongan tidak ditemukan.")
+                context.user_data["state"] = None
+                return
+
+            if job.company:
+                job.company.recruitment_email = email_input
+                await session.flush()
+
+            from app.agents.email_drafting_agent import email_drafting_agent
+            draft = await email_drafting_agent.draft_email_for_job(
+                session=session,
+                user_id=user_id,
+                company_id=job.company_id,
+                job_id=job.id,
+                recipient_email=email_input
+            )
+            context.user_data["state"] = None
+
+            if draft:
+                keyboard = [
+                    [
+                        InlineKeyboardButton("🚀 Kirim Email Sekarang", callback_data=f"send:{draft.id}"),
+                        InlineKeyboardButton("✏️ Ubah Email", callback_data=f"edit_email:{draft.id}")
+                    ],
+                    [
+                        InlineKeyboardButton("✏️ Edit Teks Body", callback_data=f"edit_draft:{draft.id}"),
+                        InlineKeyboardButton("🗑️ Batalkan", callback_data=f"reject:{draft.id}")
+                    ],
+                    [InlineKeyboardButton("⬅️ Kembali ke Info Loker", callback_data=f"job_back:{job.id}")]
+                ]
+                await update.message.reply_text(
+                    f"✅ <b>Draft Lamaran Email Berhasil Dibuat!</b>\n\n"
+                    f"🏢 <b>Perusahaan:</b> <code>{job.company_name}</code>\n"
+                    f"📧 <b>Tujuan:</b> <code>{draft.recipient_email}</code>\n"
+                    f"📌 <b>Subjek:</b> <b>{draft.subject}</b>\n\n"
+                    f"📄 <b>Preview Body:</b>\n<i>{draft.body[:280]}...</i>\n\n"
+                    f"📎 <b>Lampiran:</b> CV Kandidat Terlampir (.PDF)\n\n"
+                    "Klik tombol di bawah untuk langsung mengirimkan email:",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            else:
+                await update.message.reply_text("❌ Gagal membuat draft lamaran email.")
+
+    # 6. Awaiting Edit Recipient Email on Existing Draft
+    elif state and state.startswith("AWAITING_EDIT_RECIPIENT:"):
+        draft_id = int(state.split(":")[1])
+        email_input = text.strip()
+        import re
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email_input):
+            await update.message.reply_text(
+                "❌ <b>Format email tidak valid.</b> Silakan kirimkan alamat email yang valid (contoh: <code>careers@perusahaan.com</code>):",
+                parse_mode="HTML"
+            )
+            return
+
+        async with async_session_maker() as session:
+            stmt = select(EmailQueue).where((EmailQueue.id == draft_id) & (EmailQueue.user_id == user_id))
+            res = await session.execute(stmt)
+            draft = res.scalar_one_or_none()
+            if draft:
+                draft.recipient_email = email_input
+                await session.commit()
+                keyboard = [
+                    [
+                        InlineKeyboardButton("🚀 Kirim Email Sekarang", callback_data=f"send:{draft.id}"),
+                        InlineKeyboardButton("✏️ Ubah Email", callback_data=f"edit_email:{draft.id}")
+                    ],
+                    [
+                        InlineKeyboardButton("✏️ Edit Body", callback_data=f"edit_draft:{draft.id}"),
+                        InlineKeyboardButton("🗑️ Batalkan", callback_data=f"reject:{draft.id}")
+                    ]
+                ]
+                await update.message.reply_text(
+                    f"✅ <b>Email Tujuan Berhasil Diperbarui!</b>\n\n"
+                    f"📧 <b>Penerima Baru:</b> <code>{draft.recipient_email}</code>\n"
+                    f"📌 <b>Subjek:</b> <b>{draft.subject}</b>",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+        context.user_data["state"] = None
+
 # ----------------- CALLBACK BUTTON QUERIES -----------------
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1429,26 +1595,59 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.answer()
         await search_handler(update, context)
         return
-    elif data == "btn_uploadcv":
+    elif data == "btn_latest":
         await query.answer()
-        context.user_data["state"] = "AWAITING_CV"
-        await query.message.reply_text("📄 <b>Silakan kirimkan file CV (.PDF atau .DOCX) Anda sekarang:</b>", parse_mode="HTML")
+        await latest_handler(update, context)
+        return
+    elif data == "btn_favorites":
+        await query.answer()
+        await favorites_handler(update, context)
+        return
+    elif data == "btn_queue":
+        await query.answer()
+        await queue_handler(update, context)
         return
     elif data == "btn_profile":
         await query.answer()
         await profile_handler(update, context)
         return
-    
+    elif data == "btn_uploadcv":
+        await query.answer()
+        context.user_data["state"] = "AWAITING_CV"
+        await query.message.reply_text("📄 <b>Silakan kirimkan file CV (.PDF atau .DOCX) Anda sekarang:</b>", parse_mode="HTML")
+        return
+    elif data == "btn_settings":
+        await query.answer()
+        await settings_handler(update, context)
+        return
+    elif data == "btn_connect_google":
+        await query.answer()
+        await connect_google_handler(update, context)
+        return
+    elif data == "btn_doctor":
+        await query.answer()
+        await doctor_handler(update, context)
+        return
+    elif data == "btn_help":
+        await query.answer()
+        await help_handler(update, context)
+        return
+    elif data == "btn_menu":
+        await query.answer()
+        await start_handler(update, context)
+        return
+
     try:
         action, entity_id_str = data.split(":", 1)
         entity_id = int(entity_id_str)
-        
+
         async with async_session_maker() as session:
             if action in ["fav", "unfav", "apply_email"]:
-                stmt = select(Job).options(selectinload(Job.ai_scores)).where(Job.id == entity_id)
+                stmt = select(Job).options(selectinload(Job.ai_scores), selectinload(Job.company)).where(Job.id == entity_id)
                 res = await session.execute(stmt)
                 job = res.scalar_one_or_none()
                 if not job:
+                    await query.answer("Lowongan tidak ditemukan.")
                     return
 
                 if action == "fav":
@@ -1471,20 +1670,206 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                             job_id=entity_id
                         )
                         if draft:
+                            keyboard = [
+                                [
+                                    InlineKeyboardButton("🚀 Kirim Email Sekarang", callback_data=f"send:{draft.id}"),
+                                    InlineKeyboardButton("✏️ Ubah Email", callback_data=f"edit_email:{draft.id}")
+                                ],
+                                [
+                                    InlineKeyboardButton("✏️ Edit Body", callback_data=f"edit_draft:{draft.id}"),
+                                    InlineKeyboardButton("🗑️ Batalkan", callback_data=f"reject:{draft.id}")
+                                ],
+                                [InlineKeyboardButton("⬅️ Kembali ke Info Loker", callback_data=f"job_back:{job.id}")]
+                            ]
                             await wait_draft.edit_text(
                                 f"✅ <b>Draft Lamaran Email Berhasil Dibuat!</b>\n\n"
-                                f"🏢 <b>Tujuan:</b> <code>{draft.recipient_email}</code>\n"
+                                f"🏢 <b>Perusahaan:</b> <code>{job.company_name}</code>\n"
+                                f"📧 <b>Tujuan:</b> <code>{draft.recipient_email}</code>\n"
                                 f"📌 <b>Subjek:</b> <b>{draft.subject}</b>\n\n"
                                 f"📄 <b>Preview Body:</b>\n<i>{draft.body[:280]}...</i>\n\n"
                                 f"📎 <b>Lampiran:</b> {'CV Kandidat (.pdf)' if draft.attachments else 'Tidak ada'}\n\n"
                                 "Gunakan perintah /queue untuk meninjau dan mengirim email ini menggunakan Google SSO atau SMTP.",
+                                reply_markup=InlineKeyboardMarkup(keyboard),
                                 parse_mode="HTML"
                             )
                         else:
                             await wait_draft.edit_text("❌ Gagal menyusun draft lamaran untuk lowongan ini.")
+                    except ValueError as ve:
+                        if "MISSING_RECIPIENT_EMAIL" in str(ve):
+                            prompt_kb = InlineKeyboardMarkup([
+                                [InlineKeyboardButton("✏️ Ketik Email HRD Manual", callback_data=f"prompt_email:{job.id}")],
+                                [InlineKeyboardButton("⬅️ Kembali ke Info Loker", callback_data=f"job_back:{job.id}")]
+                            ])
+                            await wait_draft.edit_text(
+                                "🏢 <b>Email HRD Tidak Ditemukan Otomatis</b>\n\n"
+                                f"Deskripsi lowongan <b>{html.escape(job.title)}</b> ({html.escape(job.company_name)}) "
+                                "tidak mencantumkan email kontak publik.\n\n"
+                                "Silakan klik tombol di bawah untuk memasukkan email HRD/Recruiter secara manual:",
+                                reply_markup=prompt_kb,
+                                parse_mode="HTML"
+                            )
+                        else:
+                            await wait_draft.edit_text(f"❌ Error membuat draft: {ve}")
                     except Exception as de:
                         logger.error(f"Error drafting email from job card: {de}")
                         await wait_draft.edit_text(f"❌ Error membuat draft: {de}")
+
+            elif action == "prompt_email":
+                context.user_data["state"] = f"AWAITING_RECIPIENT_EMAIL:{entity_id}"
+                await query.message.reply_text(
+                    "✏️ <b>Ketikkan alamat email HRD / Rekruter tujuan:</b>\n\n"
+                    "Contoh: <code>recruitment@perusahaan.com</code> atau <code>careers@startup.io</code>\n\n"
+                    "<i>Bot akan otomatis menyusun draft lamaran personal dan melampirkan CV Anda ke alamat ini.</i>",
+                    parse_mode="HTML"
+                )
+
+            elif action == "edit_email":
+                context.user_data["state"] = f"AWAITING_EDIT_RECIPIENT:{entity_id}"
+                await query.message.reply_text(
+                    "✏️ <b>Ketikkan alamat email tujuan yang baru:</b>\n\n"
+                    "Contoh: <code>careers@nama-perusahaan.com</code>",
+                    parse_mode="HTML"
+                )
+
+            elif action == "job_prep":
+                await query.answer("Menyiapkan AI Interview Prep...")
+                wait_prep = await query.message.reply_text("⏳ <i>Menyusun AI Mock Interview & Cheat Sheet khusus posisi ini...</i>", parse_mode="HTML")
+                stmt = select(Job).options(selectinload(Job.ai_scores)).where(Job.id == entity_id)
+                res = await session.execute(stmt)
+                job = res.scalar_one_or_none()
+                if not job:
+                    await wait_prep.edit_text("❌ Lowongan tidak ditemukan.")
+                    return
+
+                cv_text = await cv_service.get_active_cv_text(session, user_id)
+                prep_data = await evaluator.prepare_interview_cheatsheet(
+                    job_title=job.title,
+                    company_name=job.company_name,
+                    job_description=job.description or "",
+                    candidate_cv_text=cv_text or ""
+                )
+
+                tech_lines = []
+                for i, t in enumerate(prep_data.get("technical_questions", [])[:5], 1):
+                    q = t.get("question", "")
+                    a = t.get("answer_key", "")
+                    tech_lines.append(f"<b>{i}. {html.escape(q)}</b>\n💡 <i>Kunci: {html.escape(a)}</i>")
+                tech_str = "\n\n".join(tech_lines) if tech_lines else "• Pertanyaan teknis umum seputar pengalaman kerja."
+
+                behav_lines = []
+                for i, b in enumerate(prep_data.get("behavioral_questions", [])[:3], 1):
+                    q = b.get("question", "")
+                    tip = b.get("answer_tip", "")
+                    behav_lines.append(f"<b>{i}. {html.escape(q)}</b>\n🎯 <i>Tips: {html.escape(tip)}</i>")
+                behav_str = "\n\n".join(behav_lines) if behav_lines else "• Ceritakan pencapaian terbaik di proyek Anda."
+
+                smart_qs = "\n".join([f"• <i>{html.escape(sq)}</i>" for sq in prep_data.get("smart_questions_to_ask", [])[:3]])
+
+                prep_text = (
+                    f"🎯 <b>AI Mock Interview & Cheat Sheet</b>\n"
+                    f"🏢 <b>Perusahaan:</b> <code>{html.escape(job.company_name)}</code>\n"
+                    f"💼 <b>Posisi:</b> <b>{html.escape(job.title)}</b>\n\n"
+                    f"🧠 <b>Pertanyaan Teknis & Kunci Jawaban:</b>\n\n{tech_str}\n\n"
+                    f"🗣 <b>Pertanyaan Behavioral & Tips Jawaban:</b>\n\n{behav_str}\n\n"
+                    f"❓ <b>Pertanyaan Cerdas untuk Anda Tanyakan:</b>\n{smart_qs}"
+                )
+                back_kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Kembali ke Info Loker", callback_data=f"job_back:{job.id}")]
+                ])
+                await wait_prep.edit_text(prep_text, reply_markup=back_kb, parse_mode="HTML")
+
+            elif action == "job_ats":
+                await query.answer("Mengoptimasi CV ATS...")
+                wait_ats = await query.message.reply_text("⏳ <i>Menyesuaikan profil CV Anda agar lolos screening ATS...</i>", parse_mode="HTML")
+                stmt = select(Job).options(selectinload(Job.ai_scores)).where(Job.id == entity_id)
+                res = await session.execute(stmt)
+                job = res.scalar_one_or_none()
+                if not job:
+                    await wait_ats.edit_text("❌ Lowongan tidak ditemukan.")
+                    return
+
+                cv_text = await cv_service.get_active_cv_text(session, user_id)
+                ats_data = await evaluator.optimize_cv_for_job(
+                    job_title=job.title,
+                    job_description=job.description or "",
+                    candidate_cv_text=cv_text or ""
+                )
+                summary = html.escape(ats_data.get("tailored_summary", "Profil kandidat dengan pengalaman relevan."))
+                bullets = "\n".join([f"• {html.escape(b)}" for b in ats_data.get("highlight_bullets", [])[:4]])
+                kws = ", ".join(ats_data.get("must_have_keywords", [])[:8])
+
+                ats_text = (
+                    f"✨ <b>ATS CV Optimizer & Keyword Matcher</b>\n"
+                    f"🏢 <b>Target:</b> <code>{html.escape(job.company_name)}</code> - <b>{html.escape(job.title)}</b>\n\n"
+                    f"📝 <b>Rekomendasi Bagian 'About Me / Summary' CV:</b>\n"
+                    f"<i>\"{summary}\"</i>\n\n"
+                    f"🎯 <b>Poin Pengalaman & Achievement Relevan:</b>\n{bullets}\n\n"
+                    f"🔑 <b>Kata Kunci (Keywords) Wajib di CV:</b>\n"
+                    f"<code>{html.escape(kws)}</code>"
+                )
+                back_kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Kembali ke Info Loker", callback_data=f"job_back:{job.id}")]
+                ])
+                await wait_ats.edit_text(ats_text, reply_markup=back_kb, parse_mode="HTML")
+
+            elif action == "job_idea":
+                await query.answer("Merancang ide proyek...")
+                wait_idea = await query.message.reply_text("⏳ <i>Merancang ide proyek weekend untuk portofolio GitHub Anda...</i>", parse_mode="HTML")
+                stmt = select(Job).options(selectinload(Job.ai_scores)).where(Job.id == entity_id)
+                res = await session.execute(stmt)
+                job = res.scalar_one_or_none()
+                if not job:
+                    await wait_idea.edit_text("❌ Lowongan tidak ditemukan.")
+                    return
+
+                missing = []
+                for sc in job.ai_scores:
+                    if sc.user_id == user_id and sc.missing_skills:
+                        try:
+                            missing = json.loads(sc.missing_skills)
+                        except Exception:
+                            missing = [sc.missing_skills]
+                        break
+
+                idea_data = await evaluator.recommend_portfolio_project(
+                    job_title=job.title,
+                    job_description=job.description or "",
+                    missing_skills=missing
+                )
+                title = html.escape(idea_data.get("project_title", "Portfolio Mini-Project"))
+                pitch = html.escape(idea_data.get("pitch", ""))
+                stack = ", ".join(idea_data.get("tech_stack", ["Python", "FastAPI"]))
+                arch = html.escape(idea_data.get("architecture_hint", "src/\n  api/\n  services/\nREADME.md"))
+                time_est = html.escape(idea_data.get("estimated_time", "2-3 Hari Weekend"))
+
+                idea_text = (
+                    f"💡 <b>Rekomendasi Proyek Weekend untuk Portofolio</b>\n\n"
+                    f"🚀 <b>Judul Proyek:</b> <b>{title}</b>\n\n"
+                    f"🎯 <b>Konsep Proyek:</b>\n<i>{pitch}</i>\n\n"
+                    f"🛠 <b>Tech Stack Target:</b> <code>{html.escape(stack)}</code>\n"
+                    f"⏱ <b>Estimasi Pengerjaan:</b> <code>{time_est}</code>\n\n"
+                    f"📂 <b>Struktur Arsitektur GitHub:</b>\n"
+                    f"<pre>{arch}</pre>\n\n"
+                    f"💡 <i>Buat repo di GitHub dengan struktur di atas untuk membuktikan keahlian Anda ke recruiter!</i>"
+                )
+                back_kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Kembali ke Info Loker", callback_data=f"job_back:{job.id}")]
+                ])
+                await wait_idea.edit_text(idea_text, reply_markup=back_kb, parse_mode="HTML")
+
+            elif action == "job_back":
+                stmt = select(Job).options(selectinload(Job.ai_scores)).where(Job.id == entity_id)
+                res = await session.execute(stmt)
+                job = res.scalar_one_or_none()
+                if not job:
+                    await query.answer("Lowongan tidak ditemukan.")
+                    return
+                fav_stmt = select(Favorite).where((Favorite.job_id == entity_id) & (Favorite.user_id == user_id))
+                fav_res = await session.execute(fav_stmt)
+                is_fav = fav_res.scalar_one_or_none() is not None
+                msg_text = format_job_message(job, user_id)
+                kb = get_job_keyboard(job, is_fav=is_fav)
+                await query.edit_message_text(msg_text, reply_markup=kb, parse_mode="HTML")
 
             elif action == "adm_approve":
                 from app.agents.access_control_agent import access_control_agent

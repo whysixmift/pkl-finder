@@ -201,3 +201,86 @@ async def test_self_healing_heuristic_fallback():
     patch_sql = provider._fallback_generate_patch("ambiguous column name", "sqlite3.OperationalError")
     assert "job_service.py" in patch_sql["file_path"]
     assert "join" in patch_sql["target"]
+
+def test_contact_parser_clean_emails():
+    """Verify contact parser filters platform bot emails and extracts real company emails."""
+    from app.utils.contact_parser import extract_clean_emails, extract_whatsapp_number, build_whatsapp_outreach_url, build_linkedin_recruiter_url
+
+    desc = (
+        "We are hiring a Full-Stack Engineer! Please send CV to hr@innovative-tech.co.id or careers@innovative-tech.com. "
+        "Do not email noreply@glints.com or test@jobstreet.com or fake@perusahaan.co.id."
+    )
+    emails = extract_clean_emails(desc)
+    assert "hr@innovative-tech.co.id" in emails
+    assert "careers@innovative-tech.com" in emails
+    assert "noreply@glints.com" not in emails
+    assert "test@jobstreet.com" not in emails
+    assert "fake@perusahaan.co.id" not in emails
+
+def test_contact_parser_whatsapp_and_linkedin():
+    """Verify WhatsApp normalization and LinkedIn query link generation."""
+    from app.utils.contact_parser import extract_whatsapp_number, build_whatsapp_outreach_url, build_linkedin_recruiter_url
+
+    desc = "Hubungi PIC rekrutmen via WhatsApp: 0812-3456-7890 (Ibu Sarah)."
+    wa = extract_whatsapp_number(desc)
+    assert wa == "6281234567890"
+
+    url = build_whatsapp_outreach_url(wa, "Julian", "Backend Engineer", "TechCorp")
+    assert "wa.me/6281234567890" in url
+    assert "Julian" in url
+    assert "Backend%20Engineer" in url or "Backend+Engineer" in url or "Backend" in url
+
+    li_url = build_linkedin_recruiter_url("Gojek Indonesia")
+    assert "linkedin.com/search/results/people" in li_url
+    assert "Gojek" in li_url
+
+@pytest.mark.asyncio
+async def test_ai_career_copilot_features():
+    """Verify AI interview cheatsheet, ATS CV optimizer, and portfolio project recommender."""
+    from app.ai.evaluator import evaluator
+
+    # 1. Interview Cheatsheet
+    cs = await evaluator.prepare_interview_cheatsheet(
+        job_title="Full Stack Developer",
+        company_name="Fintech Asia",
+        job_description="Requires Python, React, and PostgreSQL experience."
+    )
+    assert "technical_questions" in cs
+    assert len(cs["technical_questions"]) >= 3
+    assert "question" in cs["technical_questions"][0]
+    assert "answer_key" in cs["technical_questions"][0]
+    assert "behavioral_questions" in cs
+    assert "smart_questions_to_ask" in cs
+
+    # 2. ATS Optimizer
+    ats = await evaluator.optimize_cv_for_job(
+        job_title="DevOps Engineer",
+        job_description="Kubernetes, Terraform, AWS, CI/CD pipeline automation."
+    )
+    assert "tailored_summary" in ats
+    assert "highlight_bullets" in ats
+    assert "must_have_keywords" in ats
+    assert len(ats["must_have_keywords"]) > 0
+
+    # 3. Portfolio Project Recommender
+    proj = await evaluator.recommend_portfolio_project(
+        job_title="Golang Backend Developer",
+        job_description="High-concurrency microservices with Kafka and Docker.",
+        missing_skills=["Golang", "Kafka"]
+    )
+    assert "project_title" in proj
+    assert "pitch" in proj
+    assert "tech_stack" in proj
+    assert "architecture_hint" in proj
+    assert "estimated_time" in proj
+
+    # 4. Follow-up email
+    fup = await evaluator.draft_followup_email(
+        candidate_name="Julian",
+        job_title="Python Developer",
+        company_name="StartupHub",
+        days_since_applied=5
+    )
+    assert "Follow-up" in fup["subject"] or "Julian" in fup["subject"]
+    assert "Julian" in fup["body"]
+    assert "StartupHub" in fup["body"]
